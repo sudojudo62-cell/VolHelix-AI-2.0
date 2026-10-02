@@ -1,0 +1,4 @@
+# Research lab dependencies (install in the agent's own venv; the repo's backend deps are separate)
+-r ../backend/requirements.txt
+statsmodels>=0.14
+pyarrow>=15   # optional: faster candle cache

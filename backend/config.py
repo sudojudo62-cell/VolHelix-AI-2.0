@@ -83,6 +83,7 @@ class Settings(BaseSettings):
     LIVE_MAX_DAILY_NOTIONAL_USDT: float = 100.0
     LIVE_SYMBOL_ALLOWLIST_STR: str = Field(default="", alias="LIVE_SYMBOL_ALLOWLIST")  # empty = WATCHED_SYMBOLS
     LIVE_API_TOKEN: str = ""                  # required (X-Live-Token) for every /api/live call that reads the account or writes
+    GOVERNOR_API_TOKEN: str = ""              # defaults to LIVE_API_TOKEN when empty
     LIVE_SIGNAL_LOGGING_ENABLED: bool = True
     LIVE_SIGNAL_INTERVAL_SEC: int = 30
 

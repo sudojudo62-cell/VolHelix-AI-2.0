@@ -1,0 +1,19 @@
+{
+  "sources": [
+    {"n": 1, "slug": "trend_following", "title": "Systematic Trend-Following with Adaptive Portfolio Construction: Enhancing Risk-Adjusted Alpha in Cryptocurrency Markets", "url": "https://arxiv.org/pdf/2602.11708", "kind": "strategy"},
+    {"n": 2, "slug": "fx_momentum", "title": "Momentum and Trend Following Trading Strategies for Currencies Revisited (and Bitcoin)", "url": "https://papers.ssrn.com/Sol3/Delivery.cfm/SSRN_ID2949379_code2672176.pdf?abstractid=2949379", "alt_urls": ["https://assets.super.so/e46b77e7-ee08-445e-b43f-4ffd88ae0a0e/files/9c27aa78-9b14-4419-a53d-bc56fa9d43b2.pdf"], "kind": "strategy"},
+    {"n": 3, "slug": "blog_49", "title": "I Backtested 49 Crypto Trading Strategies. Here's Every Single Result. (blog; low evidence quality)", "url": "https://dev.to/maymay5692/i-backtested-49-crypto-trading-strategies-heres-every-single-result-4gg5", "kind": "strategy"},
+    {"n": 4, "slug": "pairs_cointegration", "title": "Evaluation of Dynamic Cointegration-Based Pairs Trading Strategy in the Cryptocurrency Market", "url": "https://arxiv.org/abs/2109.10662", "alt_urls": ["https://ar5iv.labs.arxiv.org/html/2109.10662"], "kind": "strategy", "needs": ["shorting", "perp venue"]},
+    {"n": 5, "slug": "order_flow_state", "title": "When Does Order Flow Matter? State-Dependent L2 Liquidity-State Transitions in Crypto Futures", "url": "https://arxiv.org/pdf/2607.09230", "kind": "strategy", "needs": ["L2 order book + trade data (not available from candle APIs)"]},
+    {"n": 6, "slug": "carry_trade", "title": "Carry Trade (tradingstrategy.ai)", "url": "https://tradingstrategy.ai/docs/learn/carry-trade.html", "kind": "strategy", "needs": ["funding rates", "perp venue"]}
+  ],
+  "validation_sources_folded_into_pipeline": [
+    "The Deflated Sharpe Ratio (SSRN 2460551)",
+    "Backtesting & Research Methodology (tradingstrategy.ai)",
+    "What survives honest evaluation? LLM-driven trading strategy discovery (arXiv 2608.27734)",
+    "The Alpha Illusion: Reported Alpha from LLM trading agents (alphaXiv 2605.16895)"
+  ],
+  "venues": ["kucoin", "dydx", "hyperliquid", "deribit", "bitmex", "uniswap"],
+  "assets": ["BTC", "ETH", "SOL"],
+  "intervals": ["1h", "4h", "1d"]
+}
