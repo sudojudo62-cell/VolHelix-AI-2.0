@@ -256,6 +256,8 @@ This project is open-source under the [MIT License](LICENSE).
 
 ## 🔗 Unified Hub
 
+![Unified Hub](docs/assets/hub_dashboard.png)
+
 `/hub` in the dashboard (and `GET /api/hub/overview`) shows VolHelix plus every sibling project listed in `hub.json`
 with live status, latency and an embedded preview. Currently registered: **Infinity Swarm Desk**
 ([repo](https://github.com/sudojudo62-cell/INFINITY-SWARM-DESK)) — serve it with
