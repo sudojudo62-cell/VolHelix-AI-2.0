@@ -70,3 +70,12 @@ regime labels that disagreed, and a replay that dropped funding. All are fixed a
   model health is `ok`, and the asset is a confident, fresh top-k pick. It never places orders; the live adapter's own safeguards still apply.
   `POST /api/governor/live-authorization/pair_ranker/revoke` removes access.
 - Not yet validated on real data: the sandbox has no market-data egress. Run the sweep in a cloud session first.
+
+## Pilot run 2 fixes
+- `decide()` supports every interval (6h crashed before). DSR now uses `min(bars, independent bets)` as its sample size, and a new gate requires
+  `min_independent_bets` (8) position changes of ≥ 25% NAV; the count is reported per cell as `independent_bets`.
+- Multi-asset cells are price-checked asset by asset against single-asset KuCoin reference series. The Hyperliquid skip reason now names the history cap.
+- Venues documented to omit no-trade bars (`omits_empty_bars`, Bitfinex) have gaps filled flat (zero volume) before 4h/6h aggregation. Native 6h bars are still unused.
+- Bitfinex costs are explicit; BitMEX is no longer a default venue. Favorable/unfavorable regimes need a consistent sign across ≥ 2/3 of folds.
+- Known limit: the DSR trial variance still comes from full-sample Sharpes of grid configs, so `internal_trials` raises N but not the variance (conservative for 1h, marginal for 4h).
+- `governor run status` rows carry no report; use `report <id>`.

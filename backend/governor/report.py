@@ -3,6 +3,7 @@ from typing import Any, Dict, List, Optional
 
 import numpy as np
 
+from research.lab.venues import INTERVAL_MS
 from backend.governor.trial import START_EQUITY, TrialState, metrics_from_state
 
 # thresholds are deliberately conservative and visible in every report
@@ -26,7 +27,7 @@ def current_regime(adapter, asset: str, now_ms: int) -> Optional[str]:
 def decide(summary: Dict[str, Any], config: Dict[str, Any], st: TrialState, hours: float, regime: Optional[str]) -> Dict[str, Any]:
     interval = config["interval"]
     m = metrics_from_state(st, interval)
-    expected_bars = hours * 3_600_000 / {"1h": 3_600_000, "4h": 14_400_000, "1d": 86_400_000, "15m": 900_000, "5m": 300_000, "1m": 60_000}[interval]
+    expected_bars = hours * 3_600_000 / INTERVAL_MS[interval]
     coverage = st.bars / max(expected_bars, 1)
     best = next((r for r in summary["results"] if r["strategy_id"] == config["strategy_id"] and r["venue"] == config["venue"]
                  and r["assets"] == config["assets"] and r["interval"] == interval), None)

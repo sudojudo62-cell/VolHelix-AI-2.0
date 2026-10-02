@@ -37,11 +37,29 @@ def _dedupe_sorted(rows: List[Candle], start_ms: int, end_ms: int) -> List[Candl
     return [seen[k] for k in sorted(seen)]
 
 
-def aggregate_candles(rows: List[Candle], bar_ms: int) -> List[Candle]:
-    """Build `bar_ms` candles (aligned to UTC multiples of bar_ms) from finer ones. Incomplete buckets are dropped."""
+def fill_flat_gaps(rows: List[Candle], src_ms: int) -> List[Candle]:
+    """For venues that publish NO candle for hours without trades: insert flat zero-volume candles at the previous close.
+    Only gaps strictly inside the series are filled (never extrapolated past the ends)."""
+    out: List[Candle] = []
+    for r in rows:
+        if out:
+            t = out[-1]["ts"] + src_ms
+            while t < r["ts"]:
+                c = out[-1]["close"]
+                out.append({"ts": t, "open": c, "high": c, "low": c, "close": c, "volume": 0.0})
+                t += src_ms
+        out.append(r)
+    return out
+
+
+def aggregate_candles(rows: List[Candle], bar_ms: int, fill_gaps: bool = False) -> List[Candle]:
+    """Build `bar_ms` candles (aligned to UTC multiples of bar_ms) from finer ones. Incomplete buckets are dropped.
+    `fill_gaps` fills missing source bars flat (see fill_flat_gaps) for venues documented to omit no-trade bars."""
     if not rows:
         return []
     src = rows[1]["ts"] - rows[0]["ts"] if len(rows) > 1 else bar_ms
+    if fill_gaps and len(rows) > 1:
+        rows = fill_flat_gaps(rows, src)
     need = bar_ms // src
     buckets: Dict[int, List[Candle]] = {}
     for r in rows:
@@ -62,6 +80,7 @@ class VenueAdapter(ABC):
     has_funding = False
     min_request_gap_s = 0.15
     day_offset_ms = 0            # UTC offset of this venue's daily candle open (0 = 00:00 UTC)
+    omits_empty_bars = False     # True if the venue publishes no candle for no-trade periods (aggregation then fills them flat)
     max_history_candles = None   # hard cap on how far back the API serves (informational; reported in data quality)
     intervals: Dict[str, Any] = {}
     assets: Dict[str, str] = {}  # canonical asset -> venue symbol
@@ -119,7 +138,7 @@ class VenueAdapter(ABC):
         if interval not in self.intervals:
             bar = INTERVAL_MS[interval]
             lo, hi = (start_ms // bar) * bar, (end_ms // bar) * bar
-            return aggregate_candles(self.candles(asset, "1h", lo, hi, fresh=fresh), bar)
+            return aggregate_candles(self.candles(asset, "1h", lo, hi, fresh=fresh), bar, fill_gaps=self.omits_empty_bars)
         key = {"kind": "candles", "venue": self.name, "asset": asset, "interval": interval, "start": start_ms, "end": end_ms}
         hit = None if fresh else cache.get(key)
         if hit is not None:
@@ -370,6 +389,7 @@ class BitMEX(VenueAdapter):
 
 # ── Bitfinex spot (long public history; replaces BitMEX, whose perpetuals are retired) ──
 class Bitfinex(VenueAdapter):
+    omits_empty_bars = True      # verified by the pilot: no-trade hours are absent (AVAX/LINK lost 6-16% of 4h/6h buckets)
     name, kind = "bitfinex", "spot"
     min_request_gap_s = 1.0
     intervals = {"1m": "1m", "5m": "5m", "15m": "15m", "1h": "1h", "1d": "1D"}

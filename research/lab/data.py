@@ -91,7 +91,9 @@ def build_market_data(venue: VenueAdapter, assets: Sequence[str], interval: str,
         if 0 < head <= allow_head_gap_bars and q["expected"] > head:   # shortage confined to the warm-up zone is tolerated, but recorded
             missing = max(0.0, 100 * (1 - q["n"] / (q["expected"] - head)))
         if missing > max_missing_pct or q["bad_ohlc"] > 0.01 * q["n"]:
-            raise DataQualityError(f"{venue.name}/{a}/{interval}: poor data {q}")
+            cap = getattr(venue, "max_history_candles", None)
+            why = f" (venue serves only the most recent ~{cap} {interval} candles = ~{cap * INTERVAL_MS[interval] / 86_400_000:.0f} days)" if cap and head > 0 else ""
+            raise DataQualityError(f"{venue.name}/{a}/{interval}: poor data{why} {q}")
         per_asset[a] = {r["ts"]: r for r in rows if min(r["open"], r["high"], r["low"], r["close"]) > 0}
     common = sorted(set.intersection(*(set(d) for d in per_asset.values())))
     if len(common) < 50:

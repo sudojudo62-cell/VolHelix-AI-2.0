@@ -32,6 +32,7 @@ class CellResult(BaseModel):
     regime_performance: List[Dict[str, Any]] = Field(default_factory=list)
     modal_params: Dict[str, Any] = Field(default_factory=dict)
     window_72h_pct: Dict[str, float] = Field(default_factory=dict)  # distribution of OOS 72h returns
+    independent_bets: int = 0                 # position changes >= 25% NAV + 1; DSR uses min(bars, this) as its sample size
 
 
 class RecommendedTrial(BaseModel):

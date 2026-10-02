@@ -19,6 +19,7 @@ VENUE_COSTS: Dict[str, Dict[str, float]] = {
     "dydx": {"fee_bps": 5.0, "slippage_bps": 4.0},
     "hyperliquid": {"fee_bps": 4.5, "slippage_bps": 4.0},
     "deribit": {"fee_bps": 5.0, "slippage_bps": 4.0},
+    "bitfinex": {"fee_bps": 10.0, "slippage_bps": 5.0},  # explicit: taker 0.1% tier + slippage proxy (was an implicit default)
     "bitmex": {"fee_bps": 7.5, "slippage_bps": 5.0},
     "uniswap": {"fee_bps": 30.0, "slippage_bps": 10.0},  # 0.3% pool fee class + price impact/gas proxy
 }

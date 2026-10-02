@@ -24,7 +24,10 @@ from research.lab.summary import CellResult, RecommendedTrial, Source, StrategyS
 from research.lab.venues import INTERVAL_MS, NotSupported, VenueAdapter, VenueError, get_venue
 
 DAY = 86_400_000
-GATES = {"min_oos_return_pct": 0.0, "min_dsr": 0.5, "max_drawdown_pct": 35.0, "min_oos_bars_days": 60}
+GATES = {"min_oos_return_pct": 0.0, "min_dsr": 0.5, "max_drawdown_pct": 35.0, "min_oos_bars_days": 60, "min_independent_bets": 8}
+BET_TURNOVER = 0.25   # a bar whose gross weight change is >= 25% of NAV starts a new "bet" (vol-target jitter does not)
+MIN_FOLD_DAYS = 5     # a regime counts in a fold only with this many days there
+FOLD_CONSISTENCY = 2 / 3
 
 
 @dataclass
@@ -107,9 +110,25 @@ def evaluate_cell(strategy: Strategy, md: MarketData, a0: int, combos: List[dict
     labels = regime_labels(md.ts, md.close[:, 0])[first_oos:first_oos + len(r_oos)]
     modal = json.loads(Counter(picks).most_common(1)[0][0])
     sk, ku = M.moments(r_oos)
+    # DSR must count independent bets, not bars: a strategy that flips direction 3 times has ~4 bets however fine the bars are
+    n_bets = int(max(2, 1 + int((t_oos >= BET_TURNOVER).sum())))
+    bar_days = bar / DAY
+    fold_pos: Dict[str, List[bool]] = {}
+    off = 0
+    for r in oos_r:
+        lab = labels[off:off + len(r)]
+        off += len(r)
+        for g in set(lab):
+            if g != "warmup" and (lab == g).sum() * bar_days >= MIN_FOLD_DAYS:
+                fold_pos.setdefault(g, []).append(bool(r[lab == g].mean() > 0))
+    regimes = regime_performance(r_oos, labels, bpy, md.interval)
+    for d in regimes:
+        v = fold_pos.get(d["regime"], [])
+        d["folds_observed"] = len(v)
+        d["fold_positive_frac"] = (sum(v) / len(v)) if v else None
     return {
         "stats": stats, "folds": folds, "bench": bench, "bench_dd": bench_dd, "full": full, "best_full": best_full, "modal": modal,
-        "regimes": regime_performance(r_oos, labels, bpy, md.interval), "window72": M.window_stats(r_oos, md.interval, 72.0),
+        "regimes": regimes, "n_bets": n_bets, "window72": M.window_stats(r_oos, md.interval, 72.0),
         "oos_sr_per_period": M.sharpe(r_oos, bpy) / np.sqrt(bpy), "n_obs": len(r_oos), "skew": sk, "kurt": ku,
     }
 
@@ -190,6 +209,12 @@ def run_sweep(strategies: Sequence[Strategy], source: Source, cfg: SweepConfig, 
                     n_trials += len(combos) * max(strat.internal_trials, 1)
                     xc = None
                     ref = ref_md.get((interval, tuple(aset))) or (ref_univ.get(interval) if getattr(strat, "tolerant_universe", False) else None)
+                    if ref is None and len(aset) > 1:   # multi-asset cell: check every asset against single-asset reference series
+                        singles = [ref_md.get((interval, (a,))) for a in aset]
+                        if all(x is not None for x in singles):
+                            checks = [cross_check(md, x, a) for a, x in zip(aset, singles)]
+                            bad = next((c for c in checks if c["ok"] is False), None)
+                            xc = bad or ({"ok": True} if all(c["ok"] for c in checks) else {"ok": None, "reason": "too few shared bars"})
                     if ref is not None and vname != cfg.reference_venue:
                         common_assets = [a for a in aset if a in ref.assets]
                         xc = cross_check(md, ref, common_assets[0]) if common_assets else {"ok": None, "reason": "no shared asset"}
@@ -206,7 +231,7 @@ def run_sweep(strategies: Sequence[Strategy], source: Source, cfg: SweepConfig, 
     results: List[CellResult] = []
     for c in cells:
         r, st = c["res"], c["res"]["stats"]
-        dsr = deflated_sharpe(r["oos_sr_per_period"], r["n_obs"], max(n_trials, 1), sr_var_by_interval.get(c["interval"], 0.0), r["skew"], r["kurt"])
+        dsr = deflated_sharpe(r["oos_sr_per_period"], min(r["n_obs"], r["n_bets"]), max(n_trials, 1), sr_var_by_interval.get(c["interval"], 0.0), r["skew"], r["kurt"])
         results.append(CellResult(
             strategy_id=c["strat"].id, venue=c["md"].venue, assets=c["aset"], interval=c["interval"],
             oos_return_pct=st["return_pct"], oos_sharpe=st["sharpe"], oos_max_drawdown_pct=st["max_drawdown_pct"], oos_bars=st["bars"],
@@ -214,6 +239,7 @@ def run_sweep(strategies: Sequence[Strategy], source: Source, cfg: SweepConfig, 
             turnover_per_day=st["turnover_per_day"],
             deflated_sharpe_prob=float(dsr), folds=r["folds"], best_full_sample={**r["best_full"], "note": "in-sample; do not trade on this"},
             regime_performance=r["regimes"], modal_params=r["modal"], window_72h_pct=r["window72"],
+            independent_bets=r["n_bets"],
         ))
     results.sort(key=lambda x: x.oos_return_pct, reverse=True)
 
@@ -223,6 +249,8 @@ def run_sweep(strategies: Sequence[Strategy], source: Source, cfg: SweepConfig, 
             why.append(f"OOS net return {x.oos_return_pct:.1f}% <= 0")
         if x.oos_return_pct <= x.benchmark_oos_return_pct and x.oos_max_drawdown_pct >= 0.5 * x.benchmark_oos_max_drawdown_pct:
             why.append(f"does not beat buy-and-hold ({x.benchmark_oos_return_pct:.1f}%) on return, nor halve its drawdown")
+        if x.independent_bets < GATES["min_independent_bets"]:
+            why.append(f"only {x.independent_bets} independent bets in the OOS window < {GATES['min_independent_bets']}")
         if (x.deflated_sharpe_prob or 0) < GATES["min_dsr"]:
             why.append(f"deflated Sharpe {x.deflated_sharpe_prob:.2f} < {GATES['min_dsr']}")
         if x.oos_max_drawdown_pct > GATES["max_drawdown_pct"]:
@@ -234,8 +262,11 @@ def run_sweep(strategies: Sequence[Strategy], source: Source, cfg: SweepConfig, 
     reasons = ["passed all out-of-sample gates"] if viable else (passes(best) if best else ["no cell produced results (see skipped)"])
     rec = None
     if best:
-        fav = [d["regime"] for d in best.regime_performance if d["sufficient"] and d["ann_return_pct"] > 0]
-        unfav = [d["regime"] for d in best.regime_performance if d["sufficient"] and d["ann_return_pct"] <= 0]
+        # a regime is only called favorable/unfavorable when its sign is consistent across folds (else it is left unnamed)
+        def _frac(d):
+            return d.get("fold_positive_frac")
+        fav = [d["regime"] for d in best.regime_performance if d["sufficient"] and d["ann_return_pct"] > 0 and (_frac(d) or 0) >= FOLD_CONSISTENCY]
+        unfav = [d["regime"] for d in best.regime_performance if d["sufficient"] and d["ann_return_pct"] <= 0 and _frac(d) is not None and _frac(d) <= 1 - FOLD_CONSISTENCY]
         w = best.window_72h_pct
         c = cfg.costs.get(best.venue) or Costs.for_venue(best.venue)
         rec = RecommendedTrial(strategy_id=best.strategy_id, venue=best.venue, assets=best.assets, interval=best.interval,

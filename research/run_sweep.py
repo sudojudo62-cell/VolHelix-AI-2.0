@@ -2,7 +2,7 @@
 """Run a strategy sweep for one source and write research/summaries/<slug>.json.
 
     python -m research.run_sweep --slug trend_following --title "Systematic Trend-Following ..." --url https://arxiv.org/... \
-        --venues kucoin dydx hyperliquid deribit bitmex uniswap --assets BTC ETH SOL --intervals 1h 4h 1d --months 6
+        --venues kucoin dydx hyperliquid deribit bitfinex uniswap --assets BTC ETH SOL --intervals 1h 4h 1d --months 6
 
 Strategies come from research/strategies/<slug>/__init__.py (STRATEGIES = [...]).
 """
@@ -23,7 +23,7 @@ def main(argv=None) -> int:
     ap.add_argument("--slug", required=True)
     ap.add_argument("--title", required=True)
     ap.add_argument("--url", required=True)
-    ap.add_argument("--venues", nargs="+", default=["kucoin", "dydx", "hyperliquid", "deribit", "bitfinex", "bitmex", "uniswap"])
+    ap.add_argument("--venues", nargs="+", default=["kucoin", "dydx", "hyperliquid", "deribit", "bitfinex", "uniswap"])
     ap.add_argument("--assets", nargs="+", default=["BTC", "ETH", "SOL"])
     ap.add_argument("--intervals", nargs="+", default=["1h", "4h", "6h", "1d"])
     ap.add_argument("--months", type=int, default=6)
