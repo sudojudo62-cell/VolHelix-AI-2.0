@@ -22,6 +22,8 @@ class CircuitBreaker:
         if daily_pnl >= 0:
             return False
             
+        if nav <= 0:
+            return False
         drawdown_pct = abs(daily_pnl) / nav
         if drawdown_pct >= self.max_drawdown:
             self.halt_trading(f"Daily drawdown {drawdown_pct*100:.2f}% exceeded limit {self.max_drawdown*100:.2f}%")

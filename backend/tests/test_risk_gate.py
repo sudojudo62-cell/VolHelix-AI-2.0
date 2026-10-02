@@ -54,6 +54,12 @@ def test_risk_gate_rejects_drawdown_circuit_breaker(base_portfolio, sample_crypt
     assert result.approved is False
     assert result.checks["drawdown_circuit_breaker"].passed is False
 
+def test_risk_gate_large_daily_gain_does_not_trip_drawdown_breaker(base_portfolio, sample_crypto_proposal):
+    gate = CryptoRiskGate()
+    base_portfolio.daily_pnl = 3500.0
+    result = gate.evaluate(sample_crypto_proposal, base_portfolio)
+    assert result.checks["drawdown_circuit_breaker"].passed is True
+
 def test_risk_gate_rejects_too_many_open_positions(base_portfolio, sample_crypto_proposal):
     gate = CryptoRiskGate()
     base_portfolio.open_positions = 5  # Limit is 5

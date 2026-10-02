@@ -43,7 +43,8 @@ class BinanceClient:
 
     def __init__(self):
         # Production market client (real market data)
-        self.market_client = BinanceSDKClient("", "")
+        # ping=False: constructing the SDK client must not hit the network (offline/blocked hosts)
+        self.market_client = BinanceSDKClient("", "", ping=False)
 
         # Testnet paper trading client
         if not settings.BINANCE_API_KEY or not settings.BINANCE_API_SECRET:
@@ -52,7 +53,8 @@ class BinanceClient:
         self.trading_client = BinanceSDKClient(
             settings.BINANCE_API_KEY,
             settings.BINANCE_API_SECRET,
-            testnet=True
+            testnet=True,
+            ping=False,
         )
         self._sync_time()
 

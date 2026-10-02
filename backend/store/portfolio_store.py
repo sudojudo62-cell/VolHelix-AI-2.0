@@ -1,5 +1,5 @@
 from typing import List, Dict
-from datetime import datetime
+from datetime import datetime, timezone
 from backend.models.portfolio import PortfolioSnapshot
 from backend.models.market import Regime, CryptoAssetBalance
 from backend.models.trade import TradeRecord
@@ -27,7 +27,20 @@ class PortfolioStore:
             exposure_by_symbol={}
         )
         self.snapshot_history: List[PortfolioSnapshot] = []
-        
+        # Daily P&L baseline: first equity observed each UTC day (resets at rollover).
+        # In-memory only, so a restart re-baselines to the equity at restart.
+        self._day_key: str = datetime.now(timezone.utc).date().isoformat()
+        self._day_start_equity: float = self.initial_capital
+
+    def _daily_pnl(self, equity: float) -> tuple:
+        today = datetime.now(timezone.utc).date().isoformat()
+        if today != self._day_key:
+            self._day_key = today
+            self._day_start_equity = equity
+        pnl = round(equity - self._day_start_equity, 2)
+        pct = round(pnl / self._day_start_equity * 100, 2) if self._day_start_equity > 0 else 0.0
+        return pnl, pct
+
     def update_from_exchange(self, account_data: dict, positions_data: List[dict], current_regime: Regime):
         """Sync the portfolio state from Binance."""
         equity = float(account_data.get('equity', self.initial_capital))
@@ -48,13 +61,14 @@ class PortfolioStore:
                 )
 
         exposures = self._calculate_exposures(positions_data)
+        daily_pnl, daily_pnl_pct = self._daily_pnl(equity)
 
         self.snapshot = PortfolioSnapshot(
             timestamp=datetime.now().isoformat(),
             equity=equity,
             buying_power=buying_power,
-            daily_pnl=0.0,
-            daily_pnl_pct=0.0,
+            daily_pnl=daily_pnl,
+            daily_pnl_pct=daily_pnl_pct,
             total_pnl=total_pnl,
             total_pnl_pct=total_pnl_pct,
             open_positions=len(positions_data),
