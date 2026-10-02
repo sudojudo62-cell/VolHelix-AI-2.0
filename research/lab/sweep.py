@@ -16,7 +16,7 @@ import numpy as np
 
 from backend.quant.backtest import deflated_sharpe
 from research.lab import metrics as M
-from research.lab.data import DataQualityError, MarketData, build_market_data, cross_check
+from research.lab.data import DataQualityError, MarketData, build_market_data, build_universe, cross_check
 from research.lab.engine import Costs, LookaheadError, assert_causal, simulate
 from research.lab.plugin import Strategy
 from research.lab.regime import regime_labels, regime_performance
@@ -123,6 +123,7 @@ def run_sweep(strategies: Sequence[Strategy], source: Source, cfg: SweepConfig, 
     trial_sr: Dict[str, List[float]] = {}
     n_trials = 0
     ref_md: Dict[tuple, MarketData] = {}
+    ref_univ: Dict[str, MarketData] = {}
     warm_start = cfg.start_ms - cfg.warmup_days * DAY
     warm_bars_for = lambda interval: int(cfg.warmup_days * DAY / INTERVAL_MS[interval])
 
@@ -150,11 +151,18 @@ def run_sweep(strategies: Sequence[Strategy], source: Source, cfg: SweepConfig, 
                     continue
                 for aset in strat.asset_sets(cfg.assets):
                     tag = f"{strat.id}/{vname}/{'+'.join(aset)}/{interval}"
+                    dropped: Dict[str, str] = {}
                     try:
-                        md = build_market_data(ad, aset, interval, warm_start, cfg.end_ms, with_funding=ad.has_funding,
-                                               allow_head_gap_bars=warm_bars_for(interval))
+                        if getattr(strat, "tolerant_universe", False):
+                            md, dropped = build_universe(ad, aset, interval, warm_start, cfg.end_ms, with_funding=ad.has_funding,
+                                                         min_assets=getattr(strat, "min_assets", 8), allow_head_gap_bars=warm_bars_for(interval))
+                            aset = list(md.assets)
+                            tag = f"{strat.id}/{vname}/{len(aset)}assets/{interval}"
+                        else:
+                            md = build_market_data(ad, aset, interval, warm_start, cfg.end_ms, with_funding=ad.has_funding,
+                                                   allow_head_gap_bars=warm_bars_for(interval))
                     except (NotSupported, DataQualityError, VenueError) as exc:
-                        skipped.append({"strategy": strat.id, "venue": vname, "assets": "+".join(aset), "interval": interval, "reason": str(exc)[:300]})
+                        skipped.append({"strategy": strat.id, "venue": vname, "assets": "+".join(aset)[:80], "interval": interval, "reason": str(exc)[:300]})
                         continue
                     window = cfg.end_ms - cfg.start_ms
                     if int(md.ts[-1]) - max(int(md.ts[0]), cfg.start_ms) < 0.97 * window:
@@ -167,10 +175,11 @@ def run_sweep(strategies: Sequence[Strategy], source: Source, cfg: SweepConfig, 
                                         "reason": f"only {warm_avail:.0f}d of warm-up history available, strategy needs {strat.warmup_days}d"})
                         continue
                     quality.append({"cell": tag, "warmup_days_available": round(warm_avail, 1), "warmup_days_requested": cfg.warmup_days,
-                                    **{a: q for a, q in md.quality.items()}})
+                                    "dropped_assets": dropped, **{a: q for a, q in md.quality.items()}})
                     a0 = int(np.searchsorted(md.ts, cfg.start_ms))
                     if vname == cfg.reference_venue:
                         ref_md[(interval, tuple(aset))] = md
+                        ref_univ[interval] = md
                     try:
                         res = evaluate_cell(strat, md, a0, combos, cfg, trial_sr)
                     except LookaheadError:
@@ -180,10 +189,12 @@ def run_sweep(strategies: Sequence[Strategy], source: Source, cfg: SweepConfig, 
                         continue
                     n_trials += len(combos) * max(strat.internal_trials, 1)
                     xc = None
-                    if (interval, tuple(aset)) in ref_md and vname != cfg.reference_venue:
-                        xc = cross_check(md, ref_md[(interval, tuple(aset))], aset[0])
+                    ref = ref_md.get((interval, tuple(aset))) or (ref_univ.get(interval) if getattr(strat, "tolerant_universe", False) else None)
+                    if ref is not None and vname != cfg.reference_venue:
+                        common_assets = [a for a in aset if a in ref.assets]
+                        xc = cross_check(md, ref, common_assets[0]) if common_assets else {"ok": None, "reason": "no shared asset"}
                         if xc["ok"] is False:
-                            skipped.append({"strategy": strat.id, "venue": vname, "assets": "+".join(aset), "interval": interval, "reason": f"price mismatch vs {cfg.reference_venue} (ratio {xc['median_ratio']:.3f}); discarded"})
+                            skipped.append({"strategy": strat.id, "venue": vname, "assets": "+".join(aset)[:80], "interval": interval, "reason": f"price mismatch vs {cfg.reference_venue} (ratio {xc['median_ratio']:.3f}); discarded"})
                             continue
                     quality[-1]["price_check"] = ("verified vs " + cfg.reference_venue) if (xc and xc["ok"]) else \
                         ("reference venue" if vname == cfg.reference_venue else "NOT VERIFIED (" + (xc["reason"] if xc else "no reference data") + ")")

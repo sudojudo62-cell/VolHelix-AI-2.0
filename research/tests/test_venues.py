@@ -34,7 +34,8 @@ def test_kucoin_error_and_unsupported():
     with pytest.raises(VenueError):
         bad.candles("BTC", "1h", 0, H)
     with pytest.raises(NotSupported):
-        adapter(KuCoin, lambda r: None).candles("DOGE2", "1h", 0, H)
+        adapter(Deribit, lambda r: None).candles("DOGE2", "1h", 0, H)       # strict map: unknown asset is unsupported
+    assert KuCoin(sleep=lambda s: None).venue_symbol("PEPE") == "PEPE-USDT"   # wide universes use the default symbol format
     with pytest.raises(NotSupported):
         adapter(KuCoin, lambda r: None).funding("BTC", 0, H)
 

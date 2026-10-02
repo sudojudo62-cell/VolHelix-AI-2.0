@@ -95,10 +95,14 @@ class VenueAdapter(ABC):
             return r.json()
         raise VenueError(f"{self.name}: request failed")
 
+    symbol_fmt = None            # e.g. "{asset}-USDT": lets wide universes work without a hand-written map; the API rejects unlisted symbols
+
     def venue_symbol(self, asset: str) -> str:
-        if asset not in self.assets:
-            raise NotSupported(f"{self.name} has no mapping for {asset}")
-        return self.assets[asset]
+        if asset in self.assets:
+            return self.assets[asset]
+        if self.symbol_fmt:
+            return self.symbol_fmt.format(asset=asset)
+        raise NotSupported(f"{self.name} has no mapping for {asset}")
 
     # ── cached public API ───────────────────────────────────────────────────
     def supports(self, interval: str) -> bool:
@@ -148,6 +152,7 @@ class VenueAdapter(ABC):
 # ── KuCoin spot ─────────────────────────────────────────────────────────────
 class KuCoin(VenueAdapter):
     name, kind = "kucoin", "spot"
+    symbol_fmt = "{asset}-USDT"
     intervals = {"1m": "1min", "5m": "5min", "15m": "15min", "1h": "1hour", "4h": "4hour", "1d": "1day"}
     assets = {"BTC": "BTC-USDT", "ETH": "ETH-USDT", "SOL": "SOL-USDT", "BNB": "BNB-USDT", "XRP": "XRP-USDT",
               "ADA": "ADA-USDT", "DOGE": "DOGE-USDT", "AVAX": "AVAX-USDT", "LINK": "LINK-USDT"}
@@ -174,6 +179,7 @@ class KuCoin(VenueAdapter):
 # ── dYdX v4 (indexer) ───────────────────────────────────────────────────────
 class DYDX(VenueAdapter):
     name, kind, has_funding = "dydx", "perp", True
+    symbol_fmt = "{asset}-USD"
     intervals = {"1m": "1MIN", "5m": "5MINS", "15m": "15MINS", "1h": "1HOUR", "4h": "4HOURS", "1d": "1DAY"}
     assets = {"BTC": "BTC-USD", "ETH": "ETH-USD", "SOL": "SOL-USD", "AVAX": "AVAX-USD", "LINK": "LINK-USD",
               "DOGE": "DOGE-USD", "ADA": "ADA-USD", "XRP": "XRP-USD"}
@@ -226,6 +232,7 @@ class DYDX(VenueAdapter):
 # ── Hyperliquid ─────────────────────────────────────────────────────────────
 class Hyperliquid(VenueAdapter):
     name, kind, has_funding = "hyperliquid", "perp", True
+    symbol_fmt = "{asset}"
     max_history_candles = 5000   # the info API serves only the most recent ~5000 candles per interval
     intervals = {"1m": "1m", "5m": "5m", "15m": "15m", "1h": "1h", "4h": "4h", "1d": "1d"}
     assets = {a: a for a in ("BTC", "ETH", "SOL", "BNB", "XRP", "AVAX", "LINK", "DOGE", "ADA")}

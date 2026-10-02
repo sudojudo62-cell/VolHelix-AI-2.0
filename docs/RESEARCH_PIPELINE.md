@@ -59,3 +59,14 @@ BitMEX contract set, silent history truncation and warm-up shortfalls, a Deribit
 regime labels that disagreed, and a replay that dropped funding. All are fixed and have regression tests. Its own conclusion
 (the paper's headline Sharpe is not reproduced; only long-only SOL trend filters earned in one strong uptrend) is in
 `research/reports/trend_following.md`; its numbers predate the fixes and are being re-run.
+
+## Model 1: Pair Scanner (cross-sectional token ranker)
+
+- `research/models/ranker.py`: causal, z-scored features → ridge, purged labels, block-bootstrap top-k probability, rank-IC health check.
+- `research/strategies/pair_ranker/`: the same model as a sweep strategy (`pair_ranker`), so it goes through the normal OOS/deflation/72h-trial path.
+- `python -m research.scanner --venue kucoin --loop 900` writes the snapshot the `/scanner` page reads (`SCANNER_SNAPSHOT_PATH` overrides).
+- The page is paper-only. `GET /api/scanner/ticket` (token-gated) returns suggested order parameters only if a human has run
+  `POST /api/governor/trials/{id}/authorize-live` (after the full 72h live paper trial, INTEGRATE, approved; `max_order_usdt` ≤ `LIVE_MAX_ORDER_USDT`),
+  model health is `ok`, and the asset is a confident, fresh top-k pick. It never places orders; the live adapter's own safeguards still apply.
+  `POST /api/governor/live-authorization/pair_ranker/revoke` removes access.
+- Not yet validated on real data: the sandbox has no market-data egress. Run the sweep in a cloud session first.

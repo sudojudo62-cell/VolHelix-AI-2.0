@@ -45,6 +45,7 @@ class FakeVenue(VenueAdapter):
     def __init__(self, series: Dict[str, List[float]], name="fake", kind="spot", has_funding=False, scale=1.0):
         self.name, self.kind, self.has_funding = name, kind, has_funding
         self.series, self.scale = series, scale
+        self.assets = {a: a for a in series}      # any asset present in the fake data is "listed"
         self._funding = {}
 
     def _fetch_candles(self, symbol, interval, start_ms, end_ms):
@@ -83,3 +84,22 @@ class LookaheadStrategy(SingleAssetSignal):
         out = np.zeros(len(close))
         out[:-1] = (close[1:] > close[:-1]).astype(float)  # uses the NEXT close: lookahead
         return out
+
+
+def panel(n, k=12, planted=0.0, vol=0.006, seed=0, start=100.0):
+    """k assets of log-price paths. `planted` > 0 adds a persistent per-asset drift (slowly varying OU alpha), i.e. a REAL
+    cross-sectional momentum effect the ranker should find; planted = 0 is a pure null (no predictability)."""
+    rng = np.random.default_rng(seed)
+    alpha = np.zeros(k)
+    lp = np.zeros((n, k))
+    cur = np.full(k, math.log(start))
+    for t in range(n):
+        alpha = 0.995 * alpha + 0.0004 * rng.standard_normal(k)
+        cur = cur + planted * alpha + vol * rng.standard_normal(k)
+        lp[t] = cur
+    return np.exp(lp)
+
+
+def panel_series(n, k=12, **kw):
+    px = panel(n, k, **kw)
+    return {f"A{j:02d}": list(px[:, j]) for j in range(k)}

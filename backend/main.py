@@ -6,6 +6,7 @@ from backend.api.flow_routes import router as flow_router
 from backend.api.hub_routes import router as hub_router
 from backend.api.live_routes import router as live_router
 from backend.api.governor_routes import router as governor_router
+from backend.api.scanner_routes import router as scanner_router
 from backend.api.websocket import socket_app
 from backend.store.trade_log import trade_log
 from backend.store.postmortem_store import postmortem_store
@@ -66,6 +67,7 @@ fastapi_app.include_router(flow_router)
 fastapi_app.include_router(hub_router)
 fastapi_app.include_router(live_router)
 fastapi_app.include_router(governor_router)
+fastapi_app.include_router(scanner_router)
 
 app = socketio.ASGIApp(sio, other_asgi_app=fastapi_app)
 

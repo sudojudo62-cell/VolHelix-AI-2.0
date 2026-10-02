@@ -135,3 +135,36 @@ def check_watchlist(now_ms: Optional[int] = None, adapter_factory=adapter_for) -
         store.update_watch(w["slug"], last_check_ts=now, last_regime=reg, consecutive_matches=hits, status=status)
         out.append({"slug": w["slug"], "regime": reg, "favorable": w["favorable"], "status": status})
     return out
+
+
+AUTHORIZE_PHRASE = "AUTHORIZE LIVE ACCESS"
+
+
+def authorize_live(trial_id: int, confirm: str, max_order_usdt: float) -> Dict[str, Any]:
+    """Second, separate human step AFTER paper approval: marks the strategy as allowed to produce live order TICKETS.
+
+    It does not enable trading. The live adapter's own switches (LIVE_TRADING_ENABLED, LIVE_ORDER_MODE, token, confirmation phrase,
+    caps, risk gate, kill switch) all still apply to every order, and orders remain manual.
+    """
+    from backend.config import settings
+    if confirm != AUTHORIZE_PHRASE:
+        raise GovernorError(f'confirm must equal "{AUTHORIZE_PHRASE}"')
+    t = store.get_trial(trial_id)
+    if not t:
+        raise GovernorError("trial not found")
+    if t["mode"] != "live":
+        raise GovernorError("replay trials are pipeline smoke tests and can never authorize live access")
+    if t["status"] != "FINISHED" or t["decision"] != "INTEGRATE" or t["approval"] != "approved":
+        raise GovernorError("needs a FINISHED live trial recommended INTEGRATE and approved by a human")
+    hours = (t["end_ts"] - t["start_ts"]) / 3_600_000
+    if hours < HOURS - 1e-6:
+        raise GovernorError(f"trial window was {hours:.0f}h; the full {HOURS:.0f}h is required")
+    if not (0 < max_order_usdt <= settings.LIVE_MAX_ORDER_USDT):
+        raise GovernorError(f"max_order_usdt must be in (0, LIVE_MAX_ORDER_USDT={settings.LIVE_MAX_ORDER_USDT}]")
+    store.set_live_authorization(t["slug"], t["strategy_id"], trial_id, max_order_usdt)
+    return {"authorized": True, "slug": t["slug"], "max_order_usdt": max_order_usdt,
+            "scope": "order tickets only; the live adapter's own safeguards and manual confirmation still apply to every order"}
+
+
+def revoke_live(slug: str) -> Dict[str, Any]:
+    return {"revoked": store.revoke_live_authorization(slug), "slug": slug}

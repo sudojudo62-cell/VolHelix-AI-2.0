@@ -26,6 +26,7 @@ def _conn() -> sqlite3.Connection:
             slug TEXT PRIMARY KEY, strategy_id TEXT, favorable TEXT, last_check_ts INTEGER, last_regime TEXT,
             consecutive_matches INTEGER DEFAULT 0, status TEXT, note TEXT, meta TEXT);
         CREATE TABLE IF NOT EXISTS integrated (slug TEXT PRIMARY KEY, strategy_id TEXT, approved_ts INTEGER, trial_id INTEGER);
+        CREATE TABLE IF NOT EXISTS live_authorization (slug TEXT PRIMARY KEY, strategy_id TEXT, trial_id INTEGER, authorized_ts INTEGER, max_order_usdt REAL, revoked_ts INTEGER);
         """
     )
     return c
@@ -123,3 +124,27 @@ def set_integrated(slug: str, strategy_id: str, trial_id: int) -> None:
 def list_integrated() -> List[Dict[str, Any]]:
     with _lock, _conn() as c:
         return [dict(r) for r in c.execute("SELECT * FROM integrated").fetchall()]
+
+
+def set_live_authorization(slug: str, strategy_id: str, trial_id: int, max_order_usdt: float) -> None:
+    with _lock, _conn() as c:
+        c.execute("INSERT OR REPLACE INTO live_authorization (slug, strategy_id, trial_id, authorized_ts, max_order_usdt, revoked_ts) VALUES (?,?,?,?,?,NULL)",
+                  (slug, strategy_id, trial_id, int(time.time() * 1000), max_order_usdt))
+
+
+def revoke_live_authorization(slug: str) -> bool:
+    with _lock, _conn() as c:
+        cur = c.execute("UPDATE live_authorization SET revoked_ts = ? WHERE slug = ? AND revoked_ts IS NULL", (int(time.time() * 1000), slug))
+        return cur.rowcount > 0
+
+
+def get_live_authorization(slug: str) -> Optional[Dict[str, Any]]:
+    """Active (non-revoked) authorization for a strategy slug, or None."""
+    with _lock, _conn() as c:
+        r = c.execute("SELECT * FROM live_authorization WHERE slug = ? AND revoked_ts IS NULL", (slug,)).fetchone()
+    return dict(r) if r else None
+
+
+def list_live_authorizations() -> List[Dict[str, Any]]:
+    with _lock, _conn() as c:
+        return [dict(r) for r in c.execute("SELECT * FROM live_authorization ORDER BY authorized_ts DESC").fetchall()]

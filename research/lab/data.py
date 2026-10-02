@@ -125,3 +125,30 @@ def cross_check(a: MarketData, b: MarketData, asset: str, tol: float = 0.05) -> 
     rb = b.close[ib, b.assets.index(asset)]
     ratio = float(np.median(ra / rb))
     return {"ok": abs(ratio - 1) <= tol, "median_ratio": ratio, "shared": int(len(common))}
+
+
+def build_universe(venue: VenueAdapter, assets: Sequence[str], interval: str, start_ms: int, end_ms: int, with_funding: bool = False,
+                   min_assets: int = 8, allow_head_gap_bars: int = 0, fresh: bool = False):
+    """Tolerant multi-asset build for ranking models: assets that fail a quality check are DROPPED and reported, not fatal.
+
+    Returns (MarketData, dropped) where dropped maps asset -> reason. Raises DataQualityError if fewer than `min_assets` survive,
+    because a cross-sectional ranker over a handful of assets is not a ranking.
+    """
+    good, dropped, nbars = [], {}, {}
+    for a in assets:
+        try:
+            m = build_market_data(venue, [a], interval, start_ms, end_ms, with_funding=False, fresh=fresh, allow_head_gap_bars=allow_head_gap_bars)
+            good.append(a)
+            nbars[a] = m.n
+        except Exception as exc:  # NotSupported, VenueError, DataQualityError: one bad asset must not sink the universe
+            dropped[a] = f"{type(exc).__name__}: {str(exc)[:160]}"
+    if nbars:  # the joint build keeps only common timestamps, so a recent listing would shorten everyone's history: drop it instead
+        longest = max(nbars.values())
+        for a in list(good):
+            if nbars[a] < 0.9 * longest:
+                good.remove(a)
+                dropped[a] = f"short history ({nbars[a]} bars vs {longest} for the longest asset)"
+    if len(good) < min_assets:
+        raise DataQualityError(f"{venue.name}: only {len(good)} of {len(assets)} assets usable (< {min_assets}); dropped={dropped}")
+    md = build_market_data(venue, good, interval, start_ms, end_ms, with_funding=with_funding, fresh=fresh, allow_head_gap_bars=allow_head_gap_bars)
+    return md, dropped

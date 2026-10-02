@@ -81,3 +81,29 @@ def reject(trial_id: int, x_live_token: Optional[str] = Header(default=None)):
         return service.reject(trial_id)
     except service.GovernorError as exc:
         raise HTTPException(409, detail=str(exc))
+
+
+class AuthorizeRequest(BaseModel):
+    confirm: str
+    max_order_usdt: float
+
+
+@router.post("/trials/{trial_id}/authorize-live")
+def authorize_live(trial_id: int, req: AuthorizeRequest, x_live_token: Optional[str] = Header(default=None)):
+    """After the 72h paper window and a human approval: allow this strategy to produce live order tickets (not auto-trading)."""
+    _auth(x_live_token)
+    try:
+        return service.authorize_live(trial_id, req.confirm, req.max_order_usdt)
+    except service.GovernorError as exc:
+        raise HTTPException(409, detail=str(exc))
+
+
+@router.post("/live-authorization/{slug}/revoke")
+def revoke_live(slug: str, x_live_token: Optional[str] = Header(default=None)):
+    _auth(x_live_token)
+    return service.revoke_live(slug)
+
+
+@router.get("/live-authorization")
+def live_authorizations():
+    return {"authorizations": store.list_live_authorizations()}
