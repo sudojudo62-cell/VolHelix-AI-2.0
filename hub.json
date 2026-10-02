@@ -1,0 +1,13 @@
+{
+  "projects": [
+    {
+      "id": "infinity-swarm-desk",
+      "name": "Infinity Swarm Desk",
+      "kind": "planner-ui",
+      "description": "ChatGPT Bot 2.0 planner dashboard (static prototype, demo metrics only).",
+      "repo": "sudojudo62-cell/INFINITY-SWARM-DESK",
+      "dashboard_url": "http://localhost:8080",
+      "health_url": "http://localhost:8080/index.html"
+    }
+  ]
+}
