@@ -3,9 +3,9 @@
 See research/reports/trend_following_strategies.md for the paper reference of every rule and for what is NOT backtestable.
 Parameters the paper leaves open (ATR length k, grids for theta/L/alpha) are ours and are labelled as such.
 
-Perp variants set requires_funding=True because the lab only loads funding for strategies that ask for it (see the
-"Bugs & friction" section of the report); spot/DEX variants are separate classes because the sweep skips requires_funding
-strategies on venues without funding.
+Funding is loaded automatically on every perp venue by the lab, so the long-only plugins run on spot, DEX and perp venues
+alike (on perps they pay/earn funding without any special class). Long/short variants are separate plugins because they are
+different strategies (they need shorting), not because of funding.
 """
 from typing import Dict, List, Tuple
 
@@ -102,6 +102,9 @@ class _ATCore(Strategy):
     source_slug = "trend_following"
     side_mode = "long"          # "long" | "longshort"
     param_grid = {"L_days": list(INNER_L_DAYS), "theta": list(INNER_THETA), "alpha": list(INNER_ALPHA)}
+    # longest lookback is L=10d; ATR(14) needs 14 bars (14 days on 1d bars). 30d lets the trailing-stop state forget its start.
+    warmup_days = 30
+    internal_trials = 1         # the (L, theta, alpha) grid IS param_grid, already counted
 
     def weights(self, md: MarketData, params: dict) -> np.ndarray:
         L = _L_bars(md, params["L_days"])
@@ -115,23 +118,14 @@ class _ATCore(Strategy):
 
 
 class ATCoreLong(_ATCore):
-    id, name = "at_core_long", "AdaptiveTrend core (momentum entry + ATR trailing stop), long-only, spot/DEX"
-    description = "Paper §3.2 long leg: enter when MOM_L > theta, exit on ATR trailing stop. Long-only for spot/DEX venues."
-    allowed_venue_kinds = {"spot", "dex"}
-
-
-class ATCoreLongPerp(_ATCore):
-    id, name = "at_core_long_perp", "AdaptiveTrend core, long-only on perps (funding charged)"
-    description = "Same as at_core_long but on perpetual venues so funding is included."
-    allowed_venue_kinds = {"perp"}
-    requires_funding = True
+    id, name = "at_core_long", "AdaptiveTrend core (momentum entry + ATR trailing stop), long-only"
+    description = "Paper §3.2 long leg: enter when MOM_L > theta, exit on ATR trailing stop. Long-only; any venue (perps pay/earn funding automatically)."
 
 
 class ATCoreLS(_ATCore):
-    id, name = "at_core_ls", "AdaptiveTrend core, long+short on perps (funding charged)"
+    id, name = "at_core_ls", "AdaptiveTrend core, long+short on perps"
     description = "Paper §3.2 long and short (mirrored) signals on one asset, +/-1x. Short mirror of Eq. (3) is our assumption."
     allowed_venue_kinds = {"perp"}
-    requires_funding = True
     side_mode = "longshort"
 
 
@@ -142,9 +136,13 @@ class ATPortfolio(Strategy):
                    "if that Sharpe >= 1.3 (long) / 1.7 (short); long leg gets lambda, short leg 1-lambda, equal weight within a leg. "
                    "Market-cap filter not applicable to 3 assets (every asset is eligible for both legs).")
     allowed_venue_kinds = {"perp"}
-    requires_funding = True
     min_assets, max_assets = 1, 3
     param_grid = {"lam": [0.7, 0.5]}
+    # Selection uses the PREVIOUS calendar month (up to 31d) plus ~30d for the trailing-stop paths to settle; the first
+    # month in the data is always flat. Each month the strategy re-optimises (L, theta, alpha) from 8 inner configs for every
+    # asset and both sides: 8 x 2 sides x 3 assets = 48 configurations searched internally (an upper bound for 1-2 assets).
+    warmup_days = 60
+    internal_trials = 48
 
     def asset_sets(self, assets):
         a = list(assets)
@@ -200,6 +198,8 @@ class _TSMOM(Strategy):
     param_grid = {"lookback_days": [30, 90]}
     vol_target = None           # None -> unit weight; else annualised vol target (paper: 10%)
     long_only = True
+    warmup_days = 90            # longest lookback (3M); the 30d vol window is shorter
+    internal_trials = 1
 
     def weights(self, md: MarketData, params: dict) -> np.ndarray:
         n, k = md.n, len(md.assets)
@@ -225,34 +225,30 @@ class _TSMOM(Strategy):
         return W
 
 
-class TSMOMSpot(_TSMOM):
+class TSMOMLong(_TSMOM):
     id, name = "tsmom", "TSMOM benchmark (1M/3M sign, monthly rebalance), long-only"
-    description = "Paper §4.3 TSMOM-1M/3M benchmark, long/flat for spot/DEX."
-    allowed_venue_kinds = {"spot", "dex"}
+    description = "Paper §4.3 TSMOM-1M/3M benchmark, long/flat. Any venue (perps pay/earn funding automatically)."
 
 
-class TSMOMPerp(_TSMOM):
-    id, name = "tsmom_perp", "TSMOM benchmark, long/short on perps (funding charged)"
-    description = "Paper §4.3 TSMOM-1M/3M benchmark, long/short for perps."
-    allowed_venue_kinds = {"perp"}
-    requires_funding = True
-    long_only = False
-
-
-class TSMOMVolSpot(_TSMOM):
+class TSMOMVolLong(_TSMOM):
     id, name = "tsmom_vs", "Vol-scaled TSMOM benchmark (10% vol target), long-only"
-    description = "Paper §4.3 vol-targeted TSMOM (10% annualised), long/flat; weights capped at 1x."
-    allowed_venue_kinds = {"spot", "dex"}
+    description = "Paper §4.3 vol-targeted TSMOM (10% annualised), long/flat; weights capped at 1x. Any venue."
     vol_target = 0.10
 
 
-class TSMOMVolPerp(_TSMOM):
-    id, name = "tsmom_vs_perp", "Vol-scaled TSMOM benchmark, long/short on perps"
+class TSMOMLS(_TSMOM):
+    id, name = "tsmom_ls", "TSMOM benchmark, long/short on perps"
+    description = "Paper §4.3 TSMOM-1M/3M benchmark, long/short (needs shorting, so perps only)."
+    allowed_venue_kinds = {"perp"}
+    long_only = False
+
+
+class TSMOMVolLS(_TSMOM):
+    id, name = "tsmom_vs_ls", "Vol-scaled TSMOM benchmark, long/short on perps"
     description = "Paper §4.3 vol-targeted TSMOM (10% annualised), long/short; weights capped at 3x."
     allowed_venue_kinds = {"perp"}
-    requires_funding = True
     long_only = False
     vol_target = 0.10
 
 
-STRATEGIES = [ATCoreLong(), ATCoreLongPerp(), ATCoreLS(), ATPortfolio(), TSMOMSpot(), TSMOMPerp(), TSMOMVolSpot(), TSMOMVolPerp()]
+STRATEGIES = [ATCoreLong(), ATCoreLS(), ATPortfolio(), TSMOMLong(), TSMOMVolLong(), TSMOMLS(), TSMOMVolLS()]

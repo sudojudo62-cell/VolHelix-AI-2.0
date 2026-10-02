@@ -1,98 +1,124 @@
-# trend_following — research report (pilot run)
+# trend_following — research report (run 2: re-run on the fixed pipeline)
 
-**Branch:** `research/trend_following` · **Run:** 2026-10-02, sweep commit `438789e`, window = 180 days to 2026-10-02 00:00 UTC (`--end 1790899200000`), OOS = last 120 days (4 folds × 30d, 60d train).
-**Source:** "Systematic Trend-Following with Adaptive Portfolio Construction: Enhancing Risk-Adjusted Alpha in Cryptocurrency Markets" (arXiv 2602.11708v1, fetched OK).
-Every number below was produced by a command in this session (sweep log, `research/summaries/trend_following.json`, and the diagnostic scripts quoted).
+**Branch:** `research/trend_following` · **Run:** 2026-10-02, lab commit `d316bfe`, 6 venues × BTC/ETH/SOL × 1h/4h/6h/1d, window 2026-02-04 → 2026-10-02 00:00 UTC (`end_ms 1790899200000`): 90d warm-up + 60d train + **6 × 30d out-of-sample folds (OOS 2026-04-05 → 2026-10-01)**.
+**Source:** "Systematic Trend-Following with Adaptive Portfolio Construction…" (arXiv 2602.11708). Strategy list unchanged: `research/reports/trend_following_strategies.md`.
+Every number below was produced by a command run in this session (sweep log, `research/summaries/trend_following.json`, scripts in `research/strategies/trend_following/verify/`).
 
-## Verdict (short)
-* **Not viable / not demonstrated.** The lab says `viable: true` (4 of 129 cells pass), but that comes from a Deflated-Sharpe scaling bug (below). With a scale-consistent DSR, **0 of 129 cells reach 0.5** (best 0.44; diagnostic ignores skew/kurtosis, so approximate). The paper's headline (Sharpe 2.41, MDD −12.7%) is **not reproduced**: its long/short portfolio (`at_portfolio`) returned at best +20.9% OOS vs buy-and-hold +49.1% on the same bars; plain long/short (`at_core_ls`) averaged −2.2% across its 22 cells.
-* The only things that "work" are **long-only trend filters on SOL on 1d** (e.g. dYdX/SOL/1d +79.1% vs B&H +65.1%) — i.e. beta captured in one strong 120-day uptrend, on one asset, with one of four folds losing (−10.6%).
-* Pipeline works end to end (sweep → ingest → replay → status), but has a correctness bug in the gate (DSR) and several data-quality blind spots; see **Bugs & friction**.
+## Verdict
+* **Lab gate: `viable: true`, 5 of 231 cells** (2592 trials). I re-implemented the best cell from scratch and it reproduces exactly (§2a-bis), so the gate result is not an accounting artefact. **My judgement: the evidence is weak and the paper's own strategy is not viable.**
+  * All 5 passing cells are **BTC perp TSMOM long/short benchmarks** (`tsmom_ls` dYdX 4h; `tsmom_vs_ls` dYdX 4h/6h, Hyperliquid 4h, Deribit 4h), not AdaptiveTrend. Three of them pass only through the "halve the buy-and-hold drawdown" leg (OOS +18–19% vs B&H +26.0%, DD 3.3–3.7% vs 29.3%).
+  * DSR 0.51–0.59 is a marginal pass and DSR counts bars as independent: `tsmom_ls` flips direction only 3 times in the analysis window (monthly sign of the 30d return: short Feb–Mar, long Apr–May, short Jun–Jul, long Aug→), i.e. ~6 independent monthly bets inside 1080 4h bars. The same return stream scores DSR 0.26 at 1h and 0.51 at 4h (§2a).
+  * The **paper's AdaptiveTrend** is not reproduced: `at_portfolio` best OOS **+33.7%** (dYdX BTC+ETH+SOL 1d) vs B&H +35.0%, Sharpe 2.21, DSR 0.29; it beat B&H on return in **0 of 15** cells. `at_core_ls` mean OOS +3.0% vs B&H +32.9% (0 of 24 beat B&H, max DSR 0.19).
+  * Best long-only cells: `at_core_long` SOL 1d on four venues, OOS +82–90% vs B&H +46%, DSR 0.44–0.49 (**just misses 0.5**; gate fails on DSR only).
+* **Do the run-1 conclusions survive?** (1) "Paper headline not reproduced" — survives (at_portfolio ≤ B&H). (2) "Only long-only SOL trend filters earn" — mostly survives for the AdaptiveTrend family (SOL 1d long-only is still the top cell: +89.6% vs B&H +46.1%, now beating B&H on return and halving its drawdown, DSR 0.49), but the corrected gate and 6-month window add a different winner family (BTC long/short TSMOM). (3) "Not viable" — changes to *lab-viable but fragile*: 5 cells pass, all benchmark strategies on one asset in a market that swung ±4 times. Run-1's numbers (4-month OOS, buggy DSR, funding ignored) are superseded.
 
-## 1. Strategies found / testability
-Full list with section references in `research/reports/trend_following_strategies.md`. Summary: the paper's AdaptiveTrend = (1) momentum entry + (2) ATR trailing stop, (3) market-cap universe filter, (4) monthly Sharpe selection, (5) 70/30 allocation, (6) monthly re-optimisation, plus TSMOM benchmarks.
-Testable on public candles(+funding): 1, 2, 4, 5, 6 (3-asset version) and the TSMOM benchmarks. **NOT BACKTESTABLE:** #3 market-cap filter / 150-pair universe (no market-cap history, lab sweeps 3 assets), and the paper's 6h bars (lab intervals are 1h/4h/1d; 1h/4h/1d swept as the timeframe factor). Parameters the paper omits (ATR length, theta/L grids, K_S, short-side stop mirror) are our assumptions and are marked in code.
-Plugins (8): `at_core_long`, `at_core_long_perp`, `at_core_ls`, `at_portfolio`, `tsmom`, `tsmom_perp`, `tsmom_vs`, `tsmom_vs_perp` (perp twins exist only because of the funding limitation, bug #2). 13 offline tests pass (`pytest research/strategies/trend_following`): causality for every plugin, a hand-computed ATR-stop example, short mirror, 70/30 split, venue weight rules.
-Paper-internal inconsistencies (affect how much to trust its numbers): Table 1 Sharpe 2.41 = 40.5/16.8 (rf not subtracted despite rf=4.5%); OOS window stated Jan 2022–Dec 2024 but Fig. 1 says to Oct 2025; "4× daily funding" is wrong for 8h funding; Fig. 1 ~140% vs Table 1 40.5% p.a. over 3 years.
-
-## 2. Sweep
-`python -m research.run_sweep --slug trend_following ... --venues kucoin dydx hyperliquid deribit bitmex uniswap --assets BTC ETH SOL --intervals 1h 4h 1d --months 6 --end 1790899200000`
-→ **129 cells, 788 trials, 91 skipped, 62 s** (data pre-cached). Cells per venue: dydx 42, hyperliquid 42, kucoin 27, deribit 18, bitmex 0, uniswap 0.
-
-### Skipped (findings, not noise)
-| venue | count | reason |
+## 1. What changed vs run 1
+| | run 1 | run 2 |
 |---|---|---|
-| uniswap | 12 / 6 / 3 / 5 | needs `THEGRAPH_API_KEY` (the adapter reported it unset; I did not read the variable, the adapter's own error is the evidence) / no SOL pool mapping / no 4h / strategy kind (perp-only plugins) |
-| bitmex | 20 | "poor data": ~10% of BTC/ETH hourly bars have open outside [low, high] (see bug #4); plus 5 no 4h, 8 no SOL, 3 kind |
-| deribit | 5 / 10 / 3 | no 4h / no SOL mapping / kind |
-| dydx, hyperliquid, kucoin | 3, 3, 5 | strategy kind not applicable (spot-only vs perp-only twins) |
+| OOS | 120 days (4 folds) | **180 days (6 folds)** |
+| cells / trials / skipped | 129 / 788 / 91 | **231 / 2592 / 116** |
+| venues with data | kucoin, dydx, hyperliquid, deribit (bitmex rejected) | + **bitfinex**; bitmex refused (settled); uniswap needs key |
+| intervals | 1h 4h 1d | + **6h**; 4h/6h aggregated from 1h where no native bars |
+| funding on perps | only twin plugins | automatic (twins deleted: 8 → 7 plugins) |
+| DSR | pooled across intervals (bug) | per interval; `internal_trials` counted (at_portfolio 48) |
+| viable | 4 (all via bug) | 5 (different cells, see verdict) |
+Plugins now: `at_core_long` (any venue), `at_core_ls`, `at_portfolio` (perp, 3-asset), `tsmom`, `tsmom_vs` (any venue), `tsmom_ls`, `tsmom_vs_ls` (perp). Renamed from `tsmom_perp`/`tsmom_vs_perp` because they are long/short strategies, not funding twins. Declared: `warmup_days` 30 / 60 (at_portfolio) / 90 (tsmom); `internal_trials` 1 / 48 (8 inner configs × 2 sides × 3 assets, re-optimised monthly) / 1. 18 strategy tests + 234 total (`pytest research backend/tests`) pass offline.
 
-### Best cells per strategy (walk-forward OOS, net of lab fees/slippage + funding on perps)
-| strategy | venue / asset / interval | OOS | B&H | Sharpe | maxDD (B&H DD) | lab DSR | last 30d | modal params |
+## 2. Fix verification (real data)
+Scripts: `research/strategies/trend_following/verify/*.py`. All outputs below were printed by those scripts on 2026-10-02.
+
+| # | Fix | Evidence (command → output) | Result |
+|---|---|---|---|
+| a | per-interval DSR | `dsr_recompute.py` recomputes every trial's per-period Sharpe over all 231 cells' parameter grids: variance 1h 0.00014205, 4h 0.00034851, 6h 0.00060802, 1d 0.00187249 — **identical to the lab's `trial_sharpe_variance_by_interval`** (to 8 digits). SR0 (N=2592) annualised: **1h 3.92, 4h 3.07, 6h 3.31, 1d 2.91**. Old pooled variance (0.00121016) would give 11.45 / 5.73 / 4.67 / 2.34. Max DSR by interval in the sweep: 1h 0.32, 4h 0.59, 6h 0.53, 1d 0.49. | **PASS** (see caveat 2a) |
+| b | funding on perps | `funding_check.py`, `at_core_long` (L5,θ.02,α2) on dYdX SOL: 1h: 7920 events, summed raw funding while long −0.001730 = engine with/without difference −0.001730 (return −31.12% → −31.00%); 4h: −0.003877 = −0.003877 (−22.58% → −22.28%). `md.funding.sum()` −0.053613 = sum of all events −0.053613. Other perp venues: `md.funding.sum()` = raw event sum on Hyperliquid BTC 4h (+0.049320), Deribit BTC 1h (+0.017790), dYdX BTC 1d (−0.025076). | **PASS** |
+| c | aggregation | `aggregation_vs_native.py` (330d, BTC/ETH/SOL): KuCoin 4h and 6h (native `4hour`/`6hour` exist; adapter only uses native 4h) — 1980/1320 bars, **max OHLC deviation 0.00 bps**, volume 0.00%; dYdX 4h (native `4HOURS`) 0.00 bps except **one SOL bar open 11.96 bps**; Hyperliquid native 4h 1980 bars vs 1246 aggregable (1h history capped ~208 d); Bitfinex native 6h (exists) 1320 vs aggregated 1318/1317/1317 with identical OHLC on shared bars (aggregation drops buckets with a missing 1h bar). | **PASS**; 2 findings (bugs 5, 6) |
+| d | Bitfinex adapter | `bitfinex_raw_probe.py`/`bitfinex_vs_kucoin.py`: raw row `[MTS, OPEN, CLOSE, HIGH, LOW, VOLUME]` as assumed (BTC 1h `[1790863200000, 84002, 84116, 84411, 83612, 54.1]`, close>open consistent with next open); ms timestamps on UTC bar opens, 1D candles open 00:00 UTC; BTC/ETH/SOL/AVAX/LINK all exist (`tAVAX:USD`, `tLINK:USD` colon form correct; `tAVAXUSD`/`tLINKUSD` return `[]`); close ratio vs KuCoin median 1.0002 (min 0.9812, max 1.0174, LINK 1h), same bar counts 1d 330/330; **`end` is inclusive** (a bar at `end_ms` is returned; the adapter's `<end` filter drops it, ok); pagination: 500d of 1h → 11994 rows over 2 pages, 11994 unique, sorted, no duplicates; **no-trade hours are omitted** (BTC 7914/7920, SOL 7911, AVAX 7766 = 1.9% missing, LINK 7602 = 4.0%, max gap 14 h) → AVAX/LINK 4h/6h aggregates lose 5.8–16.4% of buckets (LINK 6h 16.4% > 3% limit would be rejected). Wrong/missing assumptions: no `VENUE_COSTS` entry (silently falls back to 10+5 bps); Bitfinex has native 3h/6h/12h not used. | **PASS** with findings (bugs 5, 7) |
+| e | refusals/flags | BitMEX: `bitmex XBTUSD is not an active contract: Settled (expiry 2026-09-16T12:00:00.000Z)` (same for ETHUSD). Deribit: 7 `1d` cells skipped "daily candles open at +8h UTC…"; Deribit 4h/6h aggregated, 1h native. Hyperliquid: 1h/6h cells skipped (40), 1h rows over a 330d request = 4985 (207.7 d) vs `max_history_candles` 5000; native 4h/1d ran. `data_quality` has `warmup_days_available` (90.0 in all 231 cells) and `price_check`: 180 "verified vs kucoin", 36 "reference venue", 15 "NOT VERIFIED (no reference data)" — all 15 are multi-asset `at_portfolio` cells. | **PASS**; finding: Hyperliquid skip reason is `poor data {…}` without naming the history cap (bug 4); multi-asset cells never price-checked (bug 3) |
+| f | regimes | `regime_consistency.py`, BTC 330d: KuCoin and dYdX: 330 day-open instants, **0 mismatches** 1d vs 4h and 1d vs 1h; all 1980 4h instants: 0 mismatches 4h vs 1h. | **PASS** |
+| g | governor | `ingest` ok (viable true, 231 results); `replay` → trial 1 FINISHED, 18/18 bars (tsmom_ls dYdX BTC 4h), INTEGRATE (replay is not evidence). Funding in replay: same trial path with funding zeroed gives equity 10269.16 vs 10268.85 with funding (difference = −w·funding on the held position; last-72h funding sum 2.975e-05) → **applied**. Regime gate: favorable list has 4 of 6 regimes, unfavorable none → gate effectively always passes (now `midvol-up`: ok). "NOT GATED" path: `decide()` with `favorable_regimes=[]` → check `ok: True, gated: False`, detail "NOT GATED: backtest could not identify a favorable regime with enough days (now midvol-up)", mirrored in `warnings`; with unknown current regime → "NOT GATED: current regime could not be computed". Unfavorable regime (`highvol-down`) → `ok False` (gated). **`decide()` raises `KeyError '6h'`** (bug 1). | **PASS** for funding/regime paths; **FAIL** for 6h (bug 1) |
+
+### 2a. DSR caveats found while verifying
+* The same `tsmom_ls` dYdX BTC return stream: 1h OOS +72.0% Sharpe 3.03 DSR **0.26**; 4h +71.8% Sharpe 3.12 DSR **0.51**; 6h +70.6% Sharpe 3.17 DSR 0.46. SR0 differs by interval (3.92 vs 3.07 annualised) because 1h trials are noisier (cost drag, many cheap-to-flip signals); verdicts therefore depend on the sampling interval, not only the strategy.
+* `n_obs` = bars. For monthly-rebalanced strategies the effective sample is the number of rebalances (see verdict).
+* Trial variance is estimated from full-sample (partly in-sample) Sharpes of the *grid configs only*; `internal_trials` raises N (SR0) but not the variance. It is conservative here (N=2592 puts SR0 at ≈3 annualised).
+
+### 2a-bis. Independent re-implementation of the top viable cell
+`independent_tsmom_ls.py` (plain loops, own signal, own fills/costs/funding from raw dYdX candles/funding): per-fold returns +20.13/+6.83/+0.90/−0.76/+22.01/+9.60% = lab; total **+71.84%** (lab 71.84%), Sharpe 3.118 (lab 3.118), max DD 13.21% (13.21%), 1080 bars; my DSR **0.513** = lab 0.513. Monthly decisions in the window: 2026-02-01 short, 03-01 short, 04-01 long, 05-01 long, 06-01 short, 07-01 short, 08-01 long, 09-01 long, 10-01 long; BTC 67,120 (OOS start) → 84,850.
+
+## 3. Results
+`python -m research.run_sweep --slug trend_following … --venues kucoin dydx hyperliquid deribit bitfinex uniswap --assets BTC ETH SOL --intervals 1h 4h 6h 1d --months 6` → **231 cells, 2592 trials, 116 skipped, 185 s** (mostly cached data).
+
+### Cells that pass every gate (OOS net of fees/slippage/funding)
+| strategy | venue/asset/interval | OOS | B&H (DD) | Sharpe | maxDD | DSR | last 30d | params |
 |---|---|---|---|---|---|---|---|---|
-| at_core_long_perp | dydx SOL 1d | +79.1% | +65.1% | 3.55 | 12.0% (13.1%) | 0.61 | +18.2% | L=5d θ=0.05 α=2.0 |
-| at_core_long | kucoin SOL 1d | +74.6% | +65.2% | 3.40 | 12.8% (13.2%) | 0.58 | +18.4% | same |
-| tsmom | kucoin ETH 1h/4h/1d | +43.6% | +49.1% | 3.36/3.34/2.80 | 9.1% (17.4%) | 0.00 (1h) | +11.9% | lookback 90d |
-| tsmom_perp | hyperliquid ETH 1d | +36.7% | +49.3% | 1.94 | 21.6% (13.6%) | 0.24 | +11.0% | 30d |
-| at_core_ls | dydx SOL 1d | +31.5% | +65.1% | 2.09 | 12.8% (13.1%) | 0.27 | −3.1% | L=2d θ=0.02 α=2.0 |
-| at_portfolio | dydx BTC+ETH+SOL 1d | +20.9% | +49.1% | 2.11 | 11.8% (10.5%) | 0.27 | +9.2% | λ=0.7 |
-| tsmom_vs_perp | dydx BTC 1d | +11.2% | +32.3% | 2.81 | 3.3% (11.6%) | 0.43 | +2.3% | 30d |
-| tsmom_vs | kucoin BTC 4h | +9.9% | +32.2% | 3.76 | 2.1% (13.3%) | 0.01 | +2.7% | 30d |
+| tsmom_ls | dydx BTC 4h | +71.8% | +26.0% (29.3%) | 3.12 | 13.2% | 0.51 | +9.6% | 30d lookback |
+| tsmom_vs_ls | dydx BTC 4h | +19.0% | +26.0% (29.3%) | 3.39 | 3.6% | 0.59 | +2.6% | 30d |
+| tsmom_vs_ls | dydx BTC 6h | +19.3% | +26.0% | 3.42 | 3.3% | 0.53 | +2.5% | 30d |
+| tsmom_vs_ls | hyperliquid BTC 4h | +18.1% | +26.0% | 3.23 | 3.6% | 0.55 | +2.4% | 30d |
+| tsmom_vs_ls | deribit BTC 4h | +18.0% | +26.0% | 3.22 | 3.7% | 0.54 | +2.6% | 30d |
 
-Per-strategy summary over all cells (mean OOS / mean B&H / #cells beating B&H on return / #cells OOS>0): at_core_long_perp 27.5 / 47.8 / 2 / 19 of 22; at_core_long 26.9 / 48.8 / 1 / 8 of 9; tsmom 31.2 / 48.8 / 3 / 9 of 9; tsmom_perp 13.2 / 47.8 / 7 / 15 of 22; at_core_ls −2.2 / 47.8 / 0 / 11 of 22; at_portfolio 9.2 / 44.7 / 0 / 14 of 14; tsmom_vs_perp 4.3 / 47.8 / 0 / 15 of 22; tsmom_vs 7.0 / 48.8 / 0 / 9 of 9.
+### Best cell per strategy
+| strategy | cell | OOS | B&H | Sharpe | DD | DSR | 30d |
+|---|---|---|---|---|---|---|---|
+| at_core_long | dydx SOL 1d | +89.6% | +46.1% (DD 36.2%) | 2.89 | 12.0% | 0.49 | +18.2% |
+| tsmom_ls | dydx BTC 1h | +72.0% | +26.0% | 3.03 | 14.1% | 0.26 | +9.6% |
+| at_core_ls | dydx SOL 1d | +36.3% | +46.1% | 1.70 | 14.5% | 0.19 | −3.1% |
+| at_portfolio | dydx BTC+ETH+SOL 1d | +33.7% | +35.0% (31.8%) | 2.21 | 11.8% | 0.29 | +9.2% |
+| tsmom | dydx BTC 1h | +26.1% | ≈+26% | 2.05 | 10.8% | 0.09 | +9.6% |
+| tsmom_vs_ls | dydx BTC 6h | +19.3% | +26.0% | 3.42 | 3.3% | 0.53 | +2.5% |
+| tsmom_vs | dydx BTC 6h | +8.3% | ≈+26% | 2.23 | 3.2% | 0.21 | +2.5% |
 
-### Which factors mattered
-* **Interval:** mean OOS 1d 18.5% (n=46), 4h 11.0% (n=37), 1h 8.6% (n=46); in-sample mean Sharpe 1.56 / 0.84 / 0.10. (Partly the DSR/turnover-cost story: 1h turnover is expensive at 9–40 bps; the paper's own claim that 6h beats 1d is untestable here.)
-* **Venue** (mean OOS): kucoin 21.7% (27 cells, spot long-only, mostly long strategies → more B&H beta), dydx 10.7%, hyperliquid 10.5%, deribit 10.0%.
-* **Asset:** BTC 16.6%, ETH 13.1%, 3-asset portfolio 10.8%, SOL 9.4%, BTC+ETH 7.9% (mean over all strategies). The best single cells are SOL only because SOL rose most (B&H +65%).
-* **Long vs long/short:** long-only ≫ long/short in this uptrend (at_core_long_perp 27.5% vs at_core_ls −2.2% mean). **λ:** 0.7 beat 0.5 (mean in-sample Sharpe 1.36 vs 1.10; mean in-sample return 16.8% vs 10.7%), consistent with the paper's drift argument, but this is just "more long".
-* **Params** (in-sample mean Sharpe): L=5d 1.40 (2d 0.75, 10d 0.69); θ 0.05 1.04 vs 0.02 0.86; α 3.0 1.11 vs 2.0 0.79; TSMOM lookback 30d 1.46 vs 90d −1.16.
-* **In-sample vs OOS gap:** small for the top cells (e.g. dYdX SOL 1d: best-of-grid full-sample +81.7% / Sharpe 2.69 vs OOS +79.1% / 3.55) because the lab's "in-sample" window overlaps the OOS window; the real instability is fold-to-fold: train Sharpe 1.11 → OOS +24.0%; 4.58 → −10.6%; 1.74 → +36.8%; 2.72 → +18.2% (the highest train Sharpe was the losing fold).
-* **Regimes:** with 120 daily bars only `lowvol-down` (31 bars, ann. +21%) is "sufficient" for the top cell, so `favorable_regimes=['lowvol-down']`, `unfavorable=[]` (see bug #8).
+Per strategy (cells / mean OOS / mean B&H / #OOS>0 / #beat B&H / max DSR): at_core_long 48 / 27.6 / 30.8 / 45 / 23 / 0.49; at_core_ls 24 / 3.0 / 32.9 / 13 / 0 / 0.19; at_portfolio 15 / 12.2 / 31.4 / 15 / 0 / 0.29; tsmom 48 / 15.6 / 30.8 / 42 / 1 / 0.22; tsmom_ls 24 / 31.4 / 32.9 / 18 / 16 / 0.51; tsmom_vs 48 / 4.2 / 30.8 / 42 / 0 / 0.27; tsmom_vs_ls 24 / 8.9 / 32.9 / 18 / 0 / 0.59. Overall 193/231 cells OOS>0, 40/231 beat B&H on return.
 
-## 3. Data checks across venues (adversarial)
-Commands: `fetch.py`/`xcheck` scripts (kept in the session scratchpad; the repro one-liners are in the bug list).
-* **Price scale/bar-open convention: consistent.** Median close ratio vs KuCoin spot = 0.9994–0.9996 on dYdX, Hyperliquid, Deribit (perps ≈ 4 bps under USDT spot, consistent for all assets and intervals); same-timestamp return correlation 0.98–1.00 at lag 0 and ≈0 at lags ±1 (no bar-shift). BitMEX BTC ratio 0.9990; **BitMEX ETH 1h max deviation 4.48%, return correlation 0.968** (illiquid/settling).
-* **Gaps:** none (missing_pct 0.0, max_gap 0) for kucoin/dydx/hyperliquid/deribit; BitMEX ends 2026-09-16 12:00 (15.5 days short), not flagged.
-* **History length:** Hyperliquid 1h has 4985 bars only (API serves the last ~5000 candles) → 27.7 days of warm-up instead of 120 (bug #5).
-* **Funding units/sign:** all hourly except BitMEX (8h, 3 events/day). Annualised sums over the window: dYdX BTC −3.5%, ETH −2.8%, SOL −5.6%; Hyperliquid BTC +5.2%, ETH +6.1%, SOL +0.5%; Deribit BTC +2.2%, ETH +1.4%; BitMEX BTC +0.5%, ETH +17.5% (ETH quanto; ends at settlement). Magnitudes are plausible; dYdX's sign differs from the others (not a unit bug as far as I can tell; funding definitions differ). Engine wiring verified: `md.funding.sum()` equals the adapter's event sum (dydx 1d −0.028757, hyperliquid 4h +0.042958, deribit 1d/1h +0.018023/+0.017962).
-* **Engine accounting verified independently:** I re-implemented `at_core_long` on KuCoin SOL 1d with plain loops using each fold's chosen params: per-fold returns +22.88/−11.65/+35.82/+18.42%, total **+74.61%** = lab `oos_return_pct` 74.61%; my buy-and-hold **+65.16%** (net of 15 bps) = lab 65.16%. So the high numbers are real for this window, not an accounting artifact.
-* Uniswap: not run (no key); nothing invented.
+### Fold stability (the real risk)
+* `at_core_long` dYdX SOL 1d: folds −2.6, +8.7, +24.0, **−10.6** (train Sharpe 4.58, the highest), +36.8, +18.2%. Two folds carry most of the return.
+* `tsmom_ls` dYdX BTC 4h: +20.1, +6.8, +0.9, −0.8, +22.0, +9.6%; two folds (Apr, Aug: the V-turns) make 42 of the 72 points.
+* `at_portfolio` dYdX 3-asset 1d: +9.4, +1.1, +1.0, −6.8, +17.6, +9.2% (λ=0.7 picked 5 of 6 times).
+
+### Factors (means; attribution in the summary)
+* **Interval** (mean OOS): 1d 22.4% (58 cells), 6h 17.0%, 4h 12.0%, 1h 9.5%. In-sample mean Sharpe 1d 0.97, 6h 0.14, 4h 0.14, 1h −0.39. The paper's 6h-beats-1d claim is not supported.
+* **Venue** (mean OOS): deribit 18.0, kucoin 17.0, hyperliquid 15.9, dydx 14.5, bitfinex 10.9 (differences are mostly which strategies could run there: spot venues only get long-only plugins).
+* **Asset** (mean OOS): BTC 19.0, ETH 15.7, BTC+ETH+SOL 15.0, BTC+ETH 10.3, SOL 10.2. SOL's top cells are long-only SOL 1d.
+* **Long vs long/short:** BTC long/short TSMOM won this window; long/short ATR (`at_core_ls`) did not (3.0% mean). λ: 0.7 > 0.5 (in-sample Sharpe 0.45 vs 0.11).
+* **Params** (in-sample mean Sharpe): TSMOM lookback 30d 1.49 vs 90d −0.45; L 5d 0.44 (2d 0.06, 10d −0.12); θ 0.05 0.21 vs 0.02 0.05; α 3.0 0.25 vs 2.0 0.01.
+* **Regimes** (top cell, tsmom_ls dYdX BTC 4h; ≥20 days & ≥10% to count): midvol-down 204% ann., midvol-up 188%, lowvol-down 126%, highvol-up 0%; lowvol-up and highvol-down insufficient. Four of six regimes "favorable", none unfavorable → weak gate.
+* **In-sample vs OOS:** best-of-grid in-sample for `at_core_long` dYdX SOL 1d Sharpe 1.95 / +79.4% vs OOS Sharpe 2.89 / +89.6% (the lab's "in-sample" window overlaps the OOS window, so this is not a clean gap); fold-to-fold instability is the honest uncertainty.
+
+### Skipped (116)
+uniswap 40 (24 need `THEGRAPH_API_KEY` — adapter's own error, I did not read the variable; 12 no SOL pool; 4 spot/perp-kind mismatch); hyperliquid 40 (1h and 6h: history cap → "poor data", see bug 4); deribit 28 (21 no SOL mapping, 7 `1d` +8h boundary); kucoin 4 and bitfinex 4 (perp-only plugins). BitMEX not requested (retired).
 
 ## 4. Governor replay
 ```
 export GOVERNOR_DB_PATH=/tmp/gov-trend_following.db
-python -m backend.governor.run ingest research/summaries/trend_following.json   # ok: viable true, 129 results
-python -m backend.governor.run replay trend_following                           # trial 1 FINISHED, 3 bars, SHELVE
-python -m backend.governor.run status
+python -m backend.governor.run ingest research/summaries/trend_following.json   # viable true, recommended_trial true, 231 results
+python -m backend.governor.run replay trend_following                           # trial 1 FINISHED, 18 bars, INTEGRATE
+python -m backend.governor.run report 1
 ```
-Replay of dYdX/SOL/1d (the recommended trial) on the last 72h of real candles: **SHELVE**. Checks: backtest viable ✔ ("passed OOS gates" — only because of the DSR bug); trial integrity ✔ (3/3 bars, 0 gaps, 0 errors); drawdown ✔ (0.83% vs limit 17.96%); return not below backtest p10 ✔ (−0.66% vs p10 −4.50%, mean +1.62%); **market regime favorable ✘** (now `lowvol-up`; favorable `['lowvol-down']`). Watchlist entry created (`SHELVED`).
-Extra stress (doctored copies of the summary kept outside the repo, recommending a 1h and a 4h cell): both ran clean (72/72 and 18/18 bars), both SHELVE on the regime check, but the "current regime" at the same instant was `lowvol-up` (1d), `highvol-up` (1h), `midvol-up` (4h) — see bug #8.
+Recommended trial: `tsmom_ls` dYdX BTC 4h (30d). Checks: backtest viable ✔; integrity ✔ (18/18, 0 gaps, 0 errors); drawdown ✔ (1.35% vs 19.82%); return vs backtest p10 ✔ (+2.69% vs −2.59%, mean +0.94%); regime ✔ (`midvol-up`; gated). **Replay INTEGRATE is a pipeline smoke test on 18 bars, not evidence**; the approval step is human only. (`status` printed no `report` key in the trial row; `report <id>` prints it.)
 
 ## 5. Bugs & friction
-Format: file — symptom — repro — suggested fix.
+Format: file — symptom — repro — suggested fix. No LOCAL-PATCH needed (none blocking).
 
-1. **[HIGH, wrong gate] Deflated Sharpe pools per-period Sharpe variance across intervals.** `research/lab/sweep.py` (`evaluate_cell` appends `sharpe/sqrt(bpy)` to `trial_sr`; `run_sweep` uses one `sr_var` for every cell). The threshold SR₀ therefore differs by interval: lab pooled SR₀ per-period = 0.1616, i.e. **annualised 15.1 (1h), 7.6 (4h), 3.1 (1d)**, while the annualised trial-Sharpe spread is ≈1.0–1.2 for every interval. 1h/4h cells can **never** pass (0 of 83 do), and 1d cells pass against a lenient 3.1. Result: `viable: true` for 4 cells (3 SOL long-only, tsmom_vs BTC 1d); recomputed with annualised pooling (var of annualised SR, divided by bpy per cell) SR₀ ≈ 4.0 and **0 of 129 cells reach DSR 0.5** (best 0.44). Repro: wrap `evaluate_cell` to capture `trial_sr` per interval (script `dsr_diag.py`, essentially: `sd_annual = std(trial_sr_interval)*sqrt(bpy)`; prints the above). Fix: pool annualised Sharpes, pass `var_ann / bpy` into `deflated_sharpe` per cell (or compute DSR per interval); also pass the strategy-internal grid size when a plugin optimises internally (`at_portfolio` re-optimises 12×2 combos monthly, not counted in `n_trials`).
-2. **[HIGH, accounting] Funding is only loaded for strategies with `requires_funding=True`, and such strategies are skipped on venues without funding** (`sweep.py` `build_market_data(..., with_funding=strat.requires_funding)` and the `needs funding rates` skip). A perp backtest of an ordinary strategy therefore ignores funding entirely (longs pay/shorts earn nothing), and a strategy can't be both spot-capable and funding-aware. I worked around it with perp twin plugins, which doubles the plugin count and trials. Fix: load funding whenever `ad.has_funding`; make `requires_funding` mean "fail without it".
-3. **[MED, perf/cache] Disk cache never hits across runs with the default end.** `run_sweep.py` defaults `--end` to `now` in ms, and the cache key includes exact start/end (`venues.py candles`, `cache._path`), so every default re-run re-downloads (dYdX 1h ≈ 55 s per asset-interval; funding ≈ 52 s per asset, re-fetched per interval because its key uses the cell's first/last ts). Repro: run the sweep twice without `--end`. Fix: align `end` to the bar/day, key the cache by (venue, asset, interval) and extend/merge ranges. I pinned `--end` to get cache hits.
-4. **[HIGH, data] BitMEX adapter points at settled contracts and its candles violate OHLC.** `venues.py BitMEX.assets` (XBTUSD, ETHUSD). Evidence: `GET /api/v1/instrument?symbol=XBTUSD` → `state: Settled, expiry 2026-09-16T12:00Z` (also XBTUSDT, ETHUSDT; SOLUSDT settled 2026-09-02); `/instrument/active` lists only unlisted spot pairs. Candles stop 2026-09-16 (last_ts 1789556400000 vs end 1790899200000), include flat stale bars (e.g. 78521.9 O=H=L=C for hours on 09-15), and 707/6828 (BTC) and 1369/6828 (ETH) hourly bars have open outside [low, high] (BitMEX opens at the previous close). `validate_candles` computes `missing_pct` against its own last ts, so the 15.5-day truncation is invisible there, and `build_market_data` rejects the cell as "poor data" — the log reason hides the real cause. Repro: `python -c "from research.lab.venues import get_venue as g; import research.lab.data as d; r=g('bitmex').candles('BTC','1h',START,END); print(d.validate_candles(r,'1h'))"`. Fix: drop/flag settled symbols (check `state`), compare the last bar with the requested `end_ms`, and normalise high/low to include open/close for venues that stamp opens from the prior close.
-5. **[MED, silent bias] Warm-up shortfall is not checked.** Hyperliquid serves ≤5000 1h candles (4985 bars from 2026-03-08), so 1h cells have 27.7 days of warm-up instead of the configured 120, but `run_sweep` only enforces coverage of the analysis window (`0.97*window`) and `missing_pct` is relative to the first bar. Effect: `tsmom*` with a 90-day lookback is flat for the first ~62 days, and regime EMAs are cold. Fix: require `md.ts[0] <= warm_start` or record `warmup_days_available` in `data_quality` and skip/flag.
-6. **[MED, silent skip] Deribit 1d bars open at 08:00 UTC**, 8 h after every other venue (first_ts 1765008000000 vs 1764979200000). Cross-venue `shared bars = 0`, `cross_check` returns `ok: None`, and `run_sweep` treats `None` as a pass, so Deribit 1d is never price-checked and its daily bars cover a different day. Fix: treat `ok: None` as a warning in `data_quality`, and either document/align the daily boundary or compare via 1h data.
-7. **[LOW] Coverage gaps in adapters:** Deribit and BitMEX have no 4h (not aggregated from 1h even though 1h exists), Deribit/BitMEX have no SOL mapping (I did not verify whether Deribit lists a SOL perp), Uniswap has no SOL pool and no 4h; 6h (the paper's interval) is not available anywhere. Suggest aggregating 1h→4h/6h inside the lab so every perp venue has the same interval set.
-8. **[MED, governor] Regime labelling is inconsistent and too thin to gate on.** (a) `regime_labels` tercile cut-offs and EMA are computed on whatever series is passed: backtest = the cell's own interval over ~300d; `current_regime` (watchlist) = 300 daily bars; replay = ~760 bars of the cell interval (`backend/governor/service.py run_replay`). Same instant, SOL/dYdX: `lowvol-up` (1d replay), `highvol-up` (1h replay), `midvol-up` (4h replay). (b) `favorable_regimes` only counts regimes with ≥5% share and ≥30 bars (`regime_performance`): in a 120-bar daily OOS that left a single regime (`lowvol-down`), so the "regime favorable" gate was effectively "is the market in the one regime that had 31 bars". Fix: label every interval with the same daily-based definition, and mark favorable only when a regime has enough bars AND is consistent across folds; otherwise return "unknown" and don't gate on it.
-9. **[LOW/MED, governor] Replay drops funding.** `backend/governor/run.py _replay` calls `build_market_data(..., with_funding=False)` even when the strategy `requires_funding`, so replay accounting differs from the backtest (live `tick_trial` passes `strat.requires_funding`). Found by code reading; effect not measured. Also trial Sharpe is computed on 3 bars (−8.8) and printed as if meaningful.
-10. **[LOW] OOS is 4 months, not 6.** 60d train + 4×30d tests = 120 OOS bars (1d). The brief/README say "6-month walk-forward"; reports should say "6 months of data, 120 days OOS". Also Sharpe for a constant-weight strategy changes with bar size (`tsmom` kucoin ETH: 3.36 @1h, 3.34 @4h, 2.80 @1d for the same +43.6% return), so Sharpe isn't comparable across intervals.
-11. **[LOW] `research/preflight.py` reports OK for HTTP 404/451.** The run printed `OK uniswap(the graph) HTTP 404` (expected, no key) and `OK binance (control: VolHelix live feed) HTTP 451`; 451 means Binance blocks this environment (a later log line: "Service unavailable from a restricted location"). The control host is the one the live VolHelix feed uses, so the line should be BAD/WARN.
-12. **[LOW] `pytest research` triggers a live Binance call** (an ERROR line from `backend.mcp.client get_all_tickers` appears during collection via the `backend.quant.backtest` import) — tests should be hermetic. Also pytest's reported paths are wrong when run as `pytest research backend/governor` (rootdir becomes `backend`, files print as `backend/tests/...`), and the governor tests live in `backend/tests/test_governor.py` (10 pass), not `backend/governor`.
-13. **[INFO] `viability_reasons` is empty when viable** and `RULES["must_beat_p10"]` in `backend/governor/report.py` is unused (the p10 check is unconditional). Both harmless.
-14. **[INFO] I did not need any LOCAL-PATCH**; no lab/backend file was modified.
+1. **[MED, governor, new] `decide()` crashes for 6h trials.** `backend/governor/report.py:29` bar-length dict has no `"6h"` (nor aggregated intervals generally). Repro: `decide(summary, {**cfg, "interval": "6h"}, TrialState(), 72.0, "midvol-up")` → `KeyError: '6h'`. A 6h recommended trial would finish its 72h run and then fail to produce a decision. Fix: use `research.lab.venues.INTERVAL_MS[interval]`.
+2. **[MED, statistics, new] DSR counts bars, not independent bets.** `research/lab/sweep.py` passes `n_obs=len(r_oos)`. `tsmom_ls` dYdX BTC flips direction 3 times in the window yet scores DSR 0.51 on 1080 4h bars (0.26 on 4320 1h bars with the same returns). Fix: use an effective sample size (number of non-overlapping trades/rebalances or block-bootstrap/autocorrelation-adjusted n), or require a minimum number of trades per OOS window as a gate.
+3. **[MED, data quality, new] Multi-asset cells are never price-checked.** `ref_md` is keyed by `(interval, tuple(aset))` and only KuCoin populates it; perp-only multi-asset plugins (`at_portfolio`) never have a KuCoin multi-asset cell → 15 cells `price_check = NOT VERIFIED (no reference data)`. Repro: count `data_quality[*].price_check` in the summary. Fix: check each asset of a multi-asset cell against the single-asset reference series.
+4. **[LOW/MED, friction, new] Hyperliquid skip reason hides the cause.** 40 cells are skipped as `poor data {'n': 4985, 'expected': 7920, 'missing_pct': 37.058, … 'head_gap_bars': 2935}`; `max_history_candles = 5000` is known to the adapter but never mentioned. Fix: when `head_gap_bars > 0` and the adapter has `max_history_candles`, say "venue serves only ~N days of 1h history".
+5. **[MED, data, new] Aggregation drops every 4h/6h bucket with any missing 1h bar; Bitfinex omits no-trade hours.** `research/lab/venues.py aggregate_candles` (`len(b) < need: continue`). Bitfinex AVAX 1h 1.9% missing → 4h 5.8%, 6h 7.9%; LINK 4h 12.4%, 6h 16.4% (rejected by the 3% rule). BTC/ETH/SOL lose 0.1–0.2%, so this sweep is unaffected. Repro: `verify/bitfinex_vs_kucoin.py`. Fix: for venues documented to omit empty bars, forward-fill flat zero-volume 1h candles at the previous close before aggregating (or accept ≥ N−1 bars).
+6. **[LOW] Native 6h exists and is unused** on KuCoin (`6hour`) and Bitfinex (`6h`, also `3h`/`12h`); the lab aggregates instead. Aggregation matched native exactly on KuCoin (0.00 bps) so it is harmless where it ran, but Bitfinex native would fix bug 5 for 6h. One dYdX SOL 4h bar differs 11.96 bps on open between native and aggregated (informational).
+7. **[LOW] Bitfinex has no `VENUE_COSTS` entry** (`research/lab/engine.py`); `Costs.for_venue` silently uses 10+5 bps. Add an explicit entry so the assumption is visible.
+8. **[LOW] `run_sweep.py` default `--venues` still lists `bitmex`** (docs say it was retired from the default list). Default runs spend time on a guaranteed refusal.
+9. **[LOW, DSR design] `internal_trials` raises N but not the trial variance**, and the variance comes from full-sample Sharpes of grid configs only; SR0 ≈ 3 annualised at N=2592 makes the gate very strict for 1h but marginal for 4h. Worth documenting; consider estimating variance from the same walk-forward statistic that is scored.
+10. **[LOW, governor] Regime gate nearly vacuous**: favorable list = 4 of 6 regimes, unfavorable none for the recommended trial. The gate can only fail in `highvol-down`/`lowvol-up`. Suggest requiring a consistent sign across folds before naming a regime favorable.
+11. **[LOW] `governor run status` rows hold no report** (use `report <id>`); fine but undocumented in the CLI help.
+12. **[INFO] Run-1 bugs 1–2, 4–9 verified fixed (§2); preflight now prints WARN for Binance 451; `pytest research backend/tests` 234 passed.** Funding sign on dYdX is negative (longs earn) over the window: summed funding −0.0536 (330 d) — sign convention consistent with the engine (`ret − w·funding`).
 
 ## 6. Reproduce
 ```bash
 python3 -m venv .venv-trend_following && . .venv-trend_following/bin/activate && pip install -r research/requirements.txt
-python -m research.preflight --sources https://arxiv.org/pdf/2602.11708
-pytest research/strategies/trend_following
-python -m research.run_sweep --slug trend_following --title "..." --url https://arxiv.org/pdf/2602.11708 --venues kucoin dydx hyperliquid deribit bitmex uniswap --assets BTC ETH SOL --intervals 1h 4h 1d --months 6 --end 1790899200000
+python -m research.preflight
+pytest research backend/tests
+python -m research.run_sweep --slug trend_following --title "Systematic Trend-Following with Adaptive Portfolio Construction: Enhancing Risk-Adjusted Alpha in Cryptocurrency Markets" --url https://arxiv.org/pdf/2602.11708 --venues kucoin dydx hyperliquid deribit bitfinex uniswap --assets BTC ETH SOL --intervals 1h 4h 6h 1d --months 6
+for s in research/strategies/trend_following/verify/*.py; do PYTHONPATH=. python $s; done
 GOVERNOR_DB_PATH=/tmp/gov-trend_following.db python -m backend.governor.run ingest research/summaries/trend_following.json
 GOVERNOR_DB_PATH=/tmp/gov-trend_following.db python -m backend.governor.run replay trend_following
 ```

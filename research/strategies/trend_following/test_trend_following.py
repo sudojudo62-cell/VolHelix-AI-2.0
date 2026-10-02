@@ -2,7 +2,7 @@
 import numpy as np
 import pytest
 
-from research.lab.engine import WeightError, assert_causal, validate_weights
+from research.lab.engine import Costs, WeightError, assert_causal, simulate, validate_weights
 from research.strategies.trend_following import (STRATEGIES, ATCoreLong, ATCoreLS, ATPortfolio, atr, trail_position)
 from research.tests.synth import market_data, walk
 
@@ -21,9 +21,13 @@ def _multi(n=1500, seed=5, kind="perp"):
                       np.zeros((n, 2)))
 
 
-@pytest.mark.parametrize("strat", [s for s in STRATEGIES if s.id != "at_portfolio"], ids=lambda s: s.id)
-def test_single_asset_strategies_are_causal_and_obey_venue_rules(strat):
-    kind = "perp" if "perp" in strat.allowed_venue_kinds else "spot"
+def _kinds(strat):
+    return [k for k in ("spot", "perp") if k in strat.allowed_venue_kinds]
+
+
+@pytest.mark.parametrize("strat,kind", [(s, k) for s in STRATEGIES if s.id != "at_portfolio" for k in _kinds(s)],
+                         ids=lambda v: v if isinstance(v, str) else v.id)
+def test_single_asset_strategies_are_causal_and_obey_venue_rules(strat, kind):
     md = _md(kind)
     for params in (dict(zip(strat.param_grid, v)) for v in zip(*strat.param_grid.values())):
         assert_causal(strat, md, params)
@@ -81,3 +85,37 @@ def test_spot_rejects_shorting_plugin_ls():
     with pytest.raises(WeightError):
         validate_weights(md, ATCoreLS().weights(md, {"L_days": 2, "theta": 0.01, "alpha": 2.0}) - 0.5)
     assert (ATCoreLong().weights(md, {"L_days": 2, "theta": 0.01, "alpha": 2.0}) >= 0).all()
+
+
+def test_no_perp_twins_and_no_requires_funding():
+    ids = [s.id for s in STRATEGIES]
+    assert len(ids) == len(set(ids))
+    assert not [i for i in ids if i.endswith("_perp")]          # funding is automatic on perp venues; no twin plugins
+    assert not [s.id for s in STRATEGIES if s.requires_funding]
+    long_only = {"at_core_long", "tsmom", "tsmom_vs"}
+    for s in STRATEGIES:
+        assert ("spot" in s.allowed_venue_kinds) == (s.id in long_only), s.id   # only the shorting plugins are perp-only
+
+
+def test_warmup_and_internal_trials_are_declared_honestly():
+    by = {s.id: s for s in STRATEGIES}
+    assert all(s.warmup_days > 0 for s in STRATEGIES)
+    assert by["at_portfolio"].internal_trials == 8 * 2 * 3           # 8 inner configs x 2 sides x 3 assets, re-optimised monthly
+    assert by["at_portfolio"].warmup_days >= 31                      # needs a full previous calendar month
+    assert by["tsmom"].warmup_days >= max(by["tsmom"].param_grid["lookback_days"])
+    assert by["at_core_long"].warmup_days >= max(INNER_L_DAYS_FOR_TEST) and by["at_core_long"].internal_trials == 1
+
+
+INNER_L_DAYS_FOR_TEST = (2, 5, 10)
+
+
+def test_ordinary_long_plugin_pays_funding_on_perp_via_the_engine():
+    """The same plugin is charged funding automatically when the MarketData carries it (no perp twin needed)."""
+    md = _md("perp")
+    p = {"L_days": 2, "theta": 0.01, "alpha": 2.0}
+    W = ATCoreLong().weights(md, p)
+    base = simulate(md, W, Costs(0, 0)).returns
+    md.funding = np.full((md.n, 1), 1e-4)
+    paid = simulate(md, W, Costs(0, 0)).returns
+    w1 = np.concatenate([[0.0], W[:-1, 0]])
+    assert np.allclose(base - paid, w1 * 1e-4)
