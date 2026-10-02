@@ -3,6 +3,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from backend.api.routes import router
 from backend.api.flow_routes import router as flow_router
+from backend.api.hub_routes import router as hub_router
 from backend.api.websocket import socket_app
 from backend.store.trade_log import trade_log
 from backend.store.postmortem_store import postmortem_store
@@ -52,6 +53,7 @@ fastapi_app.add_middleware(
 # Include REST routes
 fastapi_app.include_router(router)
 fastapi_app.include_router(flow_router)
+fastapi_app.include_router(hub_router)
 
 app = socketio.ASGIApp(sio, other_asgi_app=fastapi_app)
 

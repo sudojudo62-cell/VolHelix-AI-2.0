@@ -3,7 +3,7 @@
 import Link from "next/link";
 import Image from "next/image";
 import { usePathname } from "next/navigation";
-import { BarChart3, FileText, Shield, LayoutDashboard, ChevronLeft, ChevronRight, Activity, Cpu } from "lucide-react";
+import { BarChart3, FileText, Shield, LayoutDashboard, ChevronLeft, ChevronRight, Activity, Cpu, Boxes } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import { useState, useEffect } from "react";
 import { getExchangeAccount } from "../lib/api";
@@ -14,6 +14,7 @@ const navItems = [
   { href: "/volatility", label: "Derivatives / Vol Lab", icon: BarChart3, key: "volatility" },
   { href: "/history", label: "Order History", icon: FileText, key: "history" },
   { href: "/audit", label: "Risk & Margin Audit", icon: Shield, key: "audit" },
+  { href: "/hub", label: "Unified Hub", icon: Boxes, key: "hub" },
 ];
 
 interface SidebarProps {

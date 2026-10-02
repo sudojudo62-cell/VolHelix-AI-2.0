@@ -251,3 +251,13 @@ npm run build
 
 ## 📄 License
 This project is open-source under the [MIT License](LICENSE).
+
+---
+
+## 🔗 Unified Hub
+
+`/hub` in the dashboard (and `GET /api/hub/overview`) shows VolHelix plus every sibling project listed in `hub.json`
+with live status, latency and an embedded preview. Currently registered: **Infinity Swarm Desk**
+([repo](https://github.com/sudojudo62-cell/INFINITY-SWARM-DESK)) — serve it with
+`python3 -m http.server 8080` inside `chatgpt_bot_2_0/`. Add more projects by appending to `hub.json`
+(`id`, `name`, `kind`, `description`, `repo`, `dashboard_url`, `health_url`); override the file path with `HUB_REGISTRY`.
