@@ -12,35 +12,38 @@ inconsistent numbers, key parameters unspecified, results on Binance 6h data 202
 ## Strategies found (all of them)
 | # | Strategy | Source reference | Needs | Backtestable here? | Plugin id |
 |---|----------|------------------|-------|--------------------|-----------|
-| 1+2 | Momentum entry `MOM_L > theta` + ATR trailing stop `S=max(S,P-alpha*ATR)` (long; short is a mirror we assumed) | §3.2, Eq. 2–3, Alg. 1 | spot (long) / perp (short) | yes | `at_core_long` (spot/DEX), `at_core_long_perp`, `at_core_ls` |
+| 1+2 | Momentum entry `MOM_L > theta` + ATR trailing stop `S=max(S,P-alpha*ATR)` (long; short is a mirror we assumed) | §3.2, Eq. 2–3, Alg. 1 | any venue (long) / perp (short) | yes | `at_core_long` (any venue; perps pay funding automatically), `at_core_ls` (perp) |
 | 3 | Market-cap universe filter (top-15 long / bottom-K short of 150+ pairs) | §3.3 stage 1 | market caps, big universe | **NOT BACKTESTABLE** | — |
 | 4+5+6 | Monthly Sharpe selection (gamma 1.3 long / 1.7 short) with monthly re-optimisation and 70/30 allocation | §3.3 stage 2, §3.4, Eq. 4–5 | perp | yes, 3-asset version | `at_portfolio` (lambda 0.7 / 0.5) |
-| 7 | TSMOM-1M/3M benchmark | §4.3 | spot / perp | yes (benchmark) | `tsmom`, `tsmom_perp` |
-| 8 | Vol-scaled TSMOM benchmark (10% vol target) | §4.3 | spot / perp | yes (benchmark) | `tsmom_vs`, `tsmom_vs_perp` |
-| 10 | 6-hour bars | §5.6 | 6h candles | lab has no 6h; 1h/4h/1d swept instead | interval factor |
+| 7 | TSMOM-1M/3M benchmark | §4.3 | any / perp (long-short) | yes (benchmark) | `tsmom`, `tsmom_ls` |
+| 8 | Vol-scaled TSMOM benchmark (10% vol target) | §4.3 | any / perp (long-short) | yes (benchmark) | `tsmom_vs`, `tsmom_vs_ls` |
+| 10 | 6-hour bars | §5.6 | 6h candles | yes: aggregated from 1h (native on some venues) | interval factor |
 
-Unspecified in the paper and fixed by us: ATR length 14, grids for L/theta/alpha, short-side stop mirror. Details: `research/reports/trend_following_strategies.md`.
+Unspecified in the paper and fixed by us: ATR length 14, grids for L/theta/alpha, short-side stop mirror. Declared in code: `warmup_days` 30 (core) / 60 (portfolio) / 90 (TSMOM); `internal_trials` 48 for `at_portfolio` (monthly re-optimisation), 1 otherwise. Details: `research/reports/trend_following_strategies.md`.
 
 ## How to run
 ```bash
+python -m research.preflight
 python -m research.run_sweep --slug trend_following --title "Systematic Trend-Following with Adaptive Portfolio Construction: Enhancing Risk-Adjusted Alpha in Cryptocurrency Markets" \
-  --url https://arxiv.org/pdf/2602.11708 --venues kucoin dydx hyperliquid deribit bitmex uniswap --assets BTC ETH SOL --intervals 1h 4h 1d --months 6 \
-  --end <day-aligned ms>        # pin --end so the disk cache is reused
+  --url https://arxiv.org/pdf/2602.11708 --venues kucoin dydx hyperliquid deribit bitfinex uniswap --assets BTC ETH SOL --intervals 1h 4h 6h 1d --months 6
 python -m backend.governor.run ingest research/summaries/trend_following.json
 ```
-Code: `research/strategies/trend_following/` (tests: `pytest research/strategies/trend_following`). Results: `research/summaries/trend_following.json`.
+Code: `research/strategies/trend_following/` (tests: `pytest research/strategies/trend_following`; fix-verification scripts in `verify/`). Results: `research/summaries/trend_following.json`.
 
-## What mattered (last sweep: commit 438789e, 2026-10-02, window = 180 days to 2026-10-02, OOS = last 120 days)
-- Best out-of-sample cell: `at_core_long_perp` dYdX / SOL / 1d, params L=5d theta=0.05 alpha=2.0 -> OOS +79.1% net vs buy-and-hold +65.1%,
-  Sharpe 3.55, max drawdown 12.0% (B&H 13.1%), lab DSR 0.61, last 30 days +18.2%. One asset, one 120-day uptrend, one of four folds lost (-10.6%).
-- **Do not trust the lab's `viable: true`.** The DSR in this sweep pools per-period Sharpe variance across 1h/4h/1d (bug, see the report). Re-scaled consistently
-  (annualised pooling, my diagnostic, skew/kurt ignored) no cell reaches DSR 0.5 (best 0.44) — i.e. nothing is demonstrated viable.
-- Factors: 1d beats 4h beats 1h (mean OOS 18.5% / 11.0% / 8.6%); long-only beats long/short (mean OOS: at_core_long_perp 27.5%, at_core_ls -2.2%, at_portfolio 9.2%);
-  mean buy-and-hold over the same cells was ~48%, so only 13 of 129 cells beat it on return. SOL > BTC/ETH only because SOL rose most. Params (in-sample mean Sharpe): L=5d, theta 0.05, alpha 3.0 best.
-  The 90-day TSMOM lookback was worst (mean in-sample Sharpe -1.16).
-- Regimes: only `lowvol-down` had enough bars (31 of 120) to be called favorable for the top cell — treat as unknown.
-- Skipped/unsupported: Uniswap (no THEGRAPH_API_KEY in this run, and no SOL pool), Deribit/BitMEX 4h and SOL, BitMEX entirely (perps settled 2026-09-16 + bad OHLC).
+## What mattered (run 2: lab commit d316bfe, 2026-10-02; 231 cells, 2592 trials; 90d warm-up + 60d train + 6 × 30d OOS, OOS 2026-04-05 → 2026-10-01)
+- Lab gate: **`viable: true`, 5 cells**, all BTC perp TSMOM long/short benchmarks (not the paper's strategy): `tsmom_ls` dYdX BTC 4h 30d lookback OOS **+71.8%** vs B&H +26.0%, Sharpe 3.12, max DD 13.2%, DSR 0.51, last 30d +9.6%
+  (independently re-implemented: identical); `tsmom_vs_ls` BTC 4h/6h on dYdX/Hyperliquid/Deribit OOS +18–19% (B&H +26.0%, DD 3.3–3.7% vs 29.3%), DSR 0.53–0.59.
+  **Fragile:** `tsmom_ls` flips direction only 3 times in the window (~6 monthly bets); the same returns score DSR 0.26 at 1h and 0.51 at 4h; two folds make 42 of the 72 points.
+- The paper's AdaptiveTrend is **not reproduced**: `at_portfolio` best +33.7% OOS vs B&H +35.0% (dYdX BTC+ETH+SOL 1d, DSR 0.29), 0 of 15 cells beat B&H; `at_core_ls` mean +3.0% (0 of 24 beat B&H).
+  Best long-only: `at_core_long` dYdX SOL 1d (L=5d, theta 0.05, alpha 2.0) OOS +89.6% vs B&H +46.1%, Sharpe 2.89, DD 12.0%, DSR 0.49 (just misses the 0.5 gate), one of six folds lost (−10.6%).
+- Factors (mean OOS): 1d 22.4% > 6h 17.0% > 4h 12.0% > 1h 9.5% (the paper's 6h-beats-1d claim is not supported); BTC 19.0% > ETH 15.7% > SOL 10.2%; TSMOM lookback 30d (in-sample Sharpe 1.49) ≫ 90d (−0.45); L=5d, theta 0.05, alpha 3.0 best in-sample; lambda 0.7 > 0.5.
+  193/231 cells earn OOS>0 but only 40/231 beat buy-and-hold on return.
+- Regimes (top cell): favorable midvol-down/midvol-up/lowvol-down/highvol-up, none unfavorable → the governor's regime gate barely discriminates.
+- Governor replay (tsmom_ls dYdX BTC 4h): INTEGRATE on 18 bars — a pipeline smoke test, not evidence; needs a real 72h trial and human approval.
+- Skipped: Uniswap (no `THEGRAPH_API_KEY`, no SOL pool), Hyperliquid 1h/6h (API serves ~5000 candles → ~208 days), Deribit 1d (08:00 UTC boundary) and SOL, BitMEX refused (perps settled 2026-09-16).
+- Run-1 numbers (4-month OOS, pooled-DSR bug, funding ignored) are superseded; run-1's "paper headline not reproduced" survives.
 
 ## Caveats
 Backtests are assumptions, not forecasts: next-bar-open fills, assumed fees/slippage, no market impact, perp liquidation not
-modeled, six months holds few regimes. The paper's headline (Sharpe 2.41, MDD 12.7%) was NOT reproduced. A strategy is only integrated after a 72h paper trial AND human approval.
+modeled, six months holds few regimes (BTC swung down/up/down/up). The paper's headline (Sharpe 2.41, MDD 12.7%) was NOT reproduced. DSR counts bars as independent, which flatters
+low-turnover strategies. A strategy is only integrated after a 72h paper trial AND human approval.
