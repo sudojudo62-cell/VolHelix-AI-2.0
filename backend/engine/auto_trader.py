@@ -468,7 +468,8 @@ class AutoTrader:
                 return {
                     "symbol": sym,
                     "diag": eval_res,
-                    "candidate": cand
+                    "candidate": cand,
+                    "price": current_price
                 }
             except Exception as e:
                 logger.warning(f"Failed scan for {sym}: {e}")
@@ -493,6 +494,17 @@ class AutoTrader:
             self.scanner_diagnostics[item["symbol"]] = item["diag"]
             if item["candidate"]:
                 valid_candidates.append(item["candidate"])
+            try:  # roadmap step 2: persist every evaluation for later calibration (never blocks trading)
+                from backend.signals import signal_log
+                d = item["diag"]
+                signal_log.log_signal(
+                    item["symbol"], "master_strategy", "paper", item.get("price") or 0.0, score=d.get("score"),
+                    valid=d.get("is_valid"), direction="BUY", decision="candidate" if item["candidate"] else "no_setup",
+                    reason="; ".join(d.get("reasons") or [])[:500], features={"status_label": d.get("status_label")},
+                )
+                signal_log.label_pending(item["symbol"], item.get("price") or 0.0)
+            except Exception as exc:
+                logger.warning(f"signal log failed for {item['symbol']}: {exc}")
 
         # Optional trend filter (flag-gated, veto-only; see backend/quant/overlay.py)
         from backend.quant.overlay import filter_candidates, adjust_order

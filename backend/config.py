@@ -73,6 +73,26 @@ class Settings(BaseSettings):
     FLOW_MAX_RECONNECT_BACKOFF_SEC: int = 60
     FLOW_CONFLUENCE_ENABLED: bool = True
 
+    # ── Live exchange adapter (real funds). Everything below is OFF / read-only by default. ──
+    # Use a SEPARATE production API key with trading enabled and WITHDRAWALS DISABLED, ideally IP-restricted.
+    LIVE_BINANCE_API_KEY: str = ""
+    LIVE_BINANCE_API_SECRET: str = ""
+    LIVE_TRADING_ENABLED: bool = False        # False = read-only (account/feeds only, no orders of any kind)
+    LIVE_ORDER_MODE: str = "test"             # "test" = validated by Binance /order/test, never executed; "live" = real orders
+    LIVE_MAX_ORDER_USDT: float = 25.0
+    LIVE_MAX_DAILY_NOTIONAL_USDT: float = 100.0
+    LIVE_SYMBOL_ALLOWLIST_STR: str = Field(default="", alias="LIVE_SYMBOL_ALLOWLIST")  # empty = WATCHED_SYMBOLS
+    LIVE_API_TOKEN: str = ""                  # required (X-Live-Token) for every /api/live call that reads the account or writes
+    LIVE_SIGNAL_LOGGING_ENABLED: bool = True
+    LIVE_SIGNAL_INTERVAL_SEC: int = 30
+
+    @property
+    def LIVE_SYMBOL_ALLOWLIST(self) -> list[str]:
+        raw = self.LIVE_SYMBOL_ALLOWLIST_STR.strip()
+        if not raw:
+            return [s.upper() for s in self.WATCHED_SYMBOLS]
+        return [s.strip().upper() for s in raw.split(",") if s.strip()]
+
     # Quant overlays (research-driven; see docs/STRATEGY_RESEARCH.md). All OFF by default: validate with
     # scripts/backtest_strategies.py before enabling. They can only veto trades or reduce size.
     TREND_FILTER_ENABLED: bool = False

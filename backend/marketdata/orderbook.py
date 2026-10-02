@@ -150,6 +150,20 @@ class LocalOrderBook:
                 
         return sorted(list(ladder_levels.values()), key=lambda x: x.price, reverse=True)
 
+    def get_snapshot(self, levels: int = 20) -> BookSnapshot:
+        """Top-N book as a BookSnapshot (empty lists if no depth has arrived; nothing is fabricated)."""
+        use_diff = self.is_synced and settings.FLOW_USE_DIFF_DEPTH
+        bids_src = self.bids if use_diff else self.partial_bids
+        asks_src = self.asks if use_diff else self.partial_asks
+        return BookSnapshot(
+            symbol=self.symbol,
+            last_update_id=self.last_update_id or 0,
+            bids=[[p, q] for p, q in sorted(bids_src.items(), reverse=True)[:levels]],
+            asks=[[p, q] for p, q in sorted(asks_src.items())[:levels]],
+            ts=int(time.time() * 1000),
+            source="MAINTAINED" if use_diff else "PARTIAL_STREAM",
+        )
+
     def get_top_of_book(self) -> Tuple[float, float]:
         """Returns best_bid, best_ask."""
         bids_src = self.bids if self.is_synced and settings.FLOW_USE_DIFF_DEPTH else self.partial_bids

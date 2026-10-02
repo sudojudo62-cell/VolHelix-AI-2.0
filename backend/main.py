@@ -4,6 +4,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from backend.api.routes import router
 from backend.api.flow_routes import router as flow_router
 from backend.api.hub_routes import router as hub_router
+from backend.api.live_routes import router as live_router
 from backend.api.websocket import socket_app
 from backend.store.trade_log import trade_log
 from backend.store.postmortem_store import postmortem_store
@@ -35,10 +36,13 @@ async def lifespan(app: FastAPI):
 
     # Run in the background so unreachable market-data hosts cannot block API startup.
     hub_task = asyncio.create_task(_start_hub())
+    from backend.signals import sampler
+    sampler.start()
 
     yield
 
     hub_task.cancel()
+    sampler.stop()
     try:
         await hub.stop()
     except Exception as e:
@@ -59,6 +63,7 @@ fastapi_app.add_middleware(
 fastapi_app.include_router(router)
 fastapi_app.include_router(flow_router)
 fastapi_app.include_router(hub_router)
+fastapi_app.include_router(live_router)
 
 app = socketio.ASGIApp(sio, other_asgi_app=fastapi_app)
 

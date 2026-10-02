@@ -134,46 +134,15 @@ class MarketDataHub:
         }
         
     def get_metrics(self, symbol: str):
-        """Helper for auto_trader to fetch current metrics."""
+        """Real FlowMetrics from buffered live data, or None when the stream is not live / has no data.
+
+        Previously this returned an all-zero placeholder, which fed fabricated flow data into the confluence gate.
+        """
+        from backend.signals.live_feed import build_live_metrics
         sym = self.connector.normalize_symbol(symbol)
-        if sym not in self.health_state:
-            return None
-        
-        # Build FlowMetrics on the fly or fetch from cache if it exists
-        from backend.engine.flow_models import FlowMetrics
-        # In a fully wired system, FlowMetrics would be computed by a confluence engine tick.
-        # Since we don't have it explicitly stored in MarketDataHub, we construct a dummy or latest cached.
-        # Defect fallback for Phase 9 auto_trader integration.
-        health = self.health_state[sym]
-        return FlowMetrics(
-            symbol=sym,
-            ts=int(time.time()*1000),
-            price=0.0,
-            session_cvd=0.0,
-            bar_delta=0.0,
-            delta_percent=0.0,
-            cvd_slope=0.0,
-            cvd_divergence=None,
-            buy_sell_ratio=1.0,
-            aggression_index=0.0,
-            absorption_flag=None,
-            stacked_imbalance_bias="NEUTRAL",
-            poc_price=0.0,
-            vah=0.0,
-            val=0.0,
-            price_vs_value="IN_VALUE",
-            book_imbalance=0.0,
-            spread_bps=0.0,
-            nearest_bid_wall=None,
-            nearest_ask_wall=None,
-            vwap=0.0,
-            vwap_upper_1=0.0,
-            vwap_lower_1=0.0,
-            trade_rate=0.0,
-            volume_rate=0.0,
-            health=health
-        )
-        
+        metrics, _reason = build_live_metrics(self.get_state(sym))
+        return metrics
+
     def get_footprint_bars(self, symbol: str, interval: str = "1m"):
         """Helper for auto_trader to fetch footprint bars."""
         sym = self.connector.normalize_symbol(symbol)
