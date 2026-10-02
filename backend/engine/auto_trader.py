@@ -494,6 +494,10 @@ class AutoTrader:
             if item["candidate"]:
                 valid_candidates.append(item["candidate"])
 
+        # Optional trend filter (flag-gated, veto-only; see backend/quant/overlay.py)
+        from backend.quant.overlay import filter_candidates, adjust_order
+        valid_candidates = filter_candidates(client, valid_candidates, self.scanner_diagnostics)
+
         # 3. STRICT MASTER STRATEGY GATE
         if not valid_candidates:
             if requested_symbol:
@@ -540,6 +544,10 @@ class AutoTrader:
         # 5. Place Paper Order on Binance Spot Testnet
         # Size position safely at 2.0% of NAV (~$200 USDT)
         order_quote_qty = 200.0
+        # Optional vol-targeted size reduction / ATR levels (flag-gated; can only reduce size)
+        order_quote_qty, levels = adjust_order(client, chosen_symbol, current_price, levels, order_quote_qty)
+        tp_price = levels["take_profit_price"]
+        sl_price = levels["stop_loss_price"]
         calculated_qty = round(order_quote_qty / current_price, 5) if current_price > 0 else 0.001
 
         order_res = client.place_order(

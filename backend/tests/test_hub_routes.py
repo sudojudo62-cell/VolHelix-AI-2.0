@@ -20,3 +20,10 @@ def test_overview_marks_unreachable_sibling_offline():
     assert by_id["volhelix"]["status"] == "online"
     assert by_id["x"]["status"] == "offline"
     assert data["summary"] == {"total": 2, "online": 1}
+
+
+def test_overview_includes_risk_limits():
+    data = client.get("/api/hub/overview").json()
+    risk = data["projects"][0]["risk"]
+    assert risk["max_daily_drawdown_pct"] > 0
+    assert risk["daily_drawdown_pct"] >= 0

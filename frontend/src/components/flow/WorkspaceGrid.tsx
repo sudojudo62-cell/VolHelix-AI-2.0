@@ -2,7 +2,7 @@
 
 import React, { useState } from "react";
 import dynamic from "next/dynamic";
-import { Panel, Group as PanelGroup, Separator as PanelResizeHandle } from "react-resizable-panels";
+import { type Layout, Panel, Group as PanelGroup, Separator as PanelResizeHandle } from "react-resizable-panels";
 import { FlowMetricsStrip } from "./FlowMetricsStrip";
 
 const FootprintChart = dynamic(() => import("./FootprintChart").then(mod => mod.FootprintChart), { ssr: false });
@@ -18,7 +18,7 @@ const getLayout = (id: string) => {
   return val ? JSON.parse(val) : undefined;
 };
 
-const saveLayout = (id: string, layout: any) => {
+const saveLayout = (id: string, layout: Layout) => {
   if (typeof window !== "undefined") {
     localStorage.setItem(id, JSON.stringify(layout));
   }
@@ -44,7 +44,7 @@ export function WorkspaceGrid({ symbol }: WorkspaceGridProps) {
         if (saved && ["ORDER_FLOW", "LIQUIDITY", "ANALYSIS"].includes(saved)) {
           return saved as WorkspacePreset;
         }
-      } catch (e) {
+      } catch {
         // ignore
       }
     }
@@ -55,7 +55,7 @@ export function WorkspaceGrid({ symbol }: WorkspaceGridProps) {
     setPreset(newPreset);
     try {
       localStorage.setItem("volhelix.workspace.v1.preset", newPreset);
-    } catch (e) {
+    } catch {
       // ignore
     }
   };

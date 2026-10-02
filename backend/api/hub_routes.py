@@ -13,6 +13,7 @@ from typing import Any, Dict, List
 import httpx
 from fastapi import APIRouter
 
+from backend.config import settings
 from backend.engine.auto_trader import auto_trader
 from backend.store.portfolio_store import portfolio_store
 
@@ -59,6 +60,11 @@ def _volhelix_card() -> Dict[str, Any]:
         card["portfolio"] = portfolio_store.get_snapshot().model_dump()
     except Exception:
         card["portfolio"] = None
+    snap = card["portfolio"] or {}
+    card["risk"] = {
+        "max_daily_drawdown_pct": settings.MAX_DAILY_DRAWDOWN * 100,
+        "daily_drawdown_pct": max(0.0, -float(snap.get("daily_pnl_pct", 0.0) or 0.0)),  # percent, same unit as above
+    }
     try:
         card["auto_trader"] = auto_trader.status()
     except Exception:

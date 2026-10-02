@@ -107,7 +107,8 @@ class CryptoRiskGate:
         )
 
         # 4. Daily Drawdown Circuit Breaker
-        daily_dd = abs(portfolio.daily_pnl) / nav if nav > 0 else 0.0
+        # Only losses count toward the drawdown breaker; a large daily gain must not halt trading.
+        daily_dd = max(0.0, -portfolio.daily_pnl) / nav if nav > 0 else 0.0
         dd_passed = daily_dd < self.MAX_DAILY_DRAWDOWN
         checks["drawdown_circuit_breaker"] = CheckResult(
             passed=dd_passed,

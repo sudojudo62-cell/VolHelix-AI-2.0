@@ -27,6 +27,7 @@ export function Sidebar({ collapsed = false, onToggle }: SidebarProps) {
   const [internalCollapsed, setInternalCollapsed] = useState(collapsed);
   const isCollapsed = onToggle !== undefined ? collapsed : internalCollapsed;
   const [utaBalance, setUtaBalance] = useState<string>("$10.00K");
+  const [risk, setRisk] = useState<{ dd: number; limit: number } | null>(null);
 
   useEffect(() => {
     let isMounted = true;
@@ -37,8 +38,19 @@ export function Sidebar({ collapsed = false, onToggle }: SidebarProps) {
         setUtaBalance(`$${(val / 1000).toFixed(2)}K`);
       })
       .catch(() => {});
+    const loadRisk = () =>
+      fetch(`${process.env.NEXT_PUBLIC_API_URL || ""}/api/hub/overview`)
+        .then((r) => (r.ok ? r.json() : null))
+        .then((d) => {
+          const r = d?.projects?.find((p: { id: string }) => p.id === "volhelix")?.risk;
+          if (isMounted && r) setRisk({ dd: r.daily_drawdown_pct, limit: r.max_daily_drawdown_pct });
+        })
+        .catch(() => {});
+    loadRisk();
+    const timer = setInterval(loadRisk, 15000);
     return () => {
       isMounted = false;
+      clearInterval(timer);
     };
   }, []);
 
@@ -157,10 +169,13 @@ export function Sidebar({ collapsed = false, onToggle }: SidebarProps) {
             <div className="space-y-1">
               <div className="flex justify-between text-[10px] text-[#5e6673]">
                 <span>Risk Level (DD)</span>
-                <span>0.0% / 5.0%</span>
+                <span>{risk ? `${risk.dd.toFixed(1)}% / ${risk.limit.toFixed(1)}%` : "-- / --"}</span>
               </div>
               <div className="w-full h-1 bg-[#121214] rounded-full overflow-hidden">
-                <div className="h-full bg-[#20b26c] rounded-full w-[4%]" />
+                <div
+                  className={`h-full rounded-full ${risk && risk.dd >= risk.limit * 0.66 ? "bg-[#e5484d]" : "bg-[#20b26c]"}`}
+                  style={{ width: `${risk ? Math.min(100, (risk.dd / risk.limit) * 100) : 0}%` }}
+                />
               </div>
             </div>
 

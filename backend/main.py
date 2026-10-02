@@ -27,13 +27,18 @@ async def lifespan(app: FastAPI):
     auto_trader.ensure_guardian_running()
     print("Position Guardian 24/7 TP/SL Engine Active...")
     
-    try:
-        await hub.start()
-    except Exception as e:
-        print(f"Failed to start MarketDataHub: {e}")
-        
+    async def _start_hub():
+        try:
+            await hub.start()
+        except Exception as e:
+            print(f"Failed to start MarketDataHub: {e}")
+
+    # Run in the background so unreachable market-data hosts cannot block API startup.
+    hub_task = asyncio.create_task(_start_hub())
+
     yield
-    
+
+    hub_task.cancel()
     try:
         await hub.stop()
     except Exception as e:
