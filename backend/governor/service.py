@@ -78,7 +78,7 @@ def tick_trial(trial_id: int, now_ms: Optional[int] = None, adapter=None) -> Dic
     strat = find_strategy(trial["slug"], trial["strategy_id"])
     processed = 0
     try:
-        md = fetch_live(adapter, cfg["assets"], cfg["interval"], now, strat.requires_funding)
+        md = fetch_live(adapter, cfg["assets"], cfg["interval"], now, strat.requires_funding or adapter.has_funding)
         processed = advance(strat, cfg["params"], _costs(cfg), md, st, end_ts=trial["end_ts"], min_ts=cfg["first_bar_ts"])
     except Exception as exc:  # data outage: record it, keep the trial alive; coverage check will judge it
         st.errors.append(f"{now}: fetch failed: {type(exc).__name__}: {str(exc)[:160]}")
@@ -89,16 +89,20 @@ def tick_trial(trial_id: int, now_ms: Optional[int] = None, adapter=None) -> Dic
     return {"status": "RUNNING", "processed": processed, "equity": st.equity, "bars": st.bars}
 
 
-def run_replay(trial_id: int, md: MarketData) -> Dict[str, Any]:
+def run_replay(trial_id: int, md: MarketData, adapter=None) -> Dict[str, Any]:
     """Pipeline test: drive a trial through historical candles as if they were live. Not evidence of live performance."""
     trial = store.get_trial(trial_id)
     cfg = trial["config"]
     st = TrialState.from_dict(trial["state"])
     strat = find_strategy(trial["slug"], trial["strategy_id"])
     advance(strat, cfg["params"], _costs(cfg), md, st, end_ts=trial["end_ts"], min_ts=cfg["first_bar_ts"])
-    from research.lab.regime import regime_labels
-    lab = regime_labels(md.close[:, 0], md.interval)[-1]
-    report = _finalize(trial, st, None if lab == "warmup" else str(lab))
+    end_ms = int(md.ts[-1]) + INTERVAL_MS[md.interval]
+    if adapter is not None:
+        regime = current_regime(adapter, cfg["assets"][0], end_ms)       # same daily-based source as live trials
+    else:
+        from research.lab.regime import latest_regime
+        regime = latest_regime(md.ts, md.close[:, 0], end_ms)
+    report = _finalize(trial, st, regime)
     return {"status": "FINISHED", "recommendation": report["recommendation"], "bars": st.bars}
 
 

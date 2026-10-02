@@ -39,15 +39,25 @@ signal or portfolio-construction rule in it, each with a section/quote reference
 - `weights(md, params)` is **causal**: row i uses data up to bar i only. The lab runs `assert_causal` and aborts on lookahead.
 - Spot/DEX venues are long-only (weights in [0,1]); perp venues may short, gross exposure ≤ 3x. Liquidation is not modeled.
 - Keep `param_grid` small (a sweep over >400 combos is refused, and every extra trial lowers the Deflated Sharpe).
+- Declare `warmup_days` (history your longest lookback needs; cells with less are skipped) and `internal_trials` (how many
+  configurations your strategy searches internally per run, e.g. a monthly re-optimisation grid); both feed the honesty checks.
+- Funding is loaded automatically on every perp venue, so ordinary long/short strategies pay and earn it; do not create
+  separate 'perp twin' plugins just for funding.
 - Add `research/strategies/<slug>/test_<slug>.py` (pytest): causality, a hand-computed signal example, and that weights obey the
   venue rules. Tests must pass offline using `research.tests.synth`.
 
-## 4. Run the sweep (6 months, all venues)
+## 4. Run the sweep (6 months out-of-sample, all venues)
 ```bash
 python -m research.run_sweep --slug <slug> --title "<source title>" --url <source url> \
-  --venues kucoin dydx hyperliquid deribit bitmex uniswap --assets BTC ETH SOL --intervals 1h 4h 1d --months 6
+  --venues kucoin dydx hyperliquid deribit bitfinex uniswap --assets BTC ETH SOL --intervals 1h 4h 6h 1d --months 6
 ```
-Read the output: `skipped` entries (venue/interval/asset gaps, price mismatches, short history) are findings, not noise; list them.
+`--months 6` means **six months of out-of-sample testing** (six 30-day test folds), preceded by 60 days of training and 90 days of
+indicator warm-up (about 330 days of data in total). `4h`/`6h` are aggregated from 1h bars where a venue has no native interval.
+BitMEX is retired from the default list (its perpetuals are settled; the adapter refuses them with a reason).
+Data caveats the lab reports instead of hiding: Hyperliquid serves only ~5000 candles per interval (so 1h cells there usually
+lack the full train+test window and are skipped), Deribit daily candles open at 08:00 UTC (1d is skipped there), and every cell's
+`data_quality` records `warmup_days_available` and a `price_check` against KuCoin (`NOT VERIFIED` means no reference to compare).
+Read the output (and sanity-check any result that looks too good by re-implementing it independently, as the pilot did): `skipped` entries (venue/interval/asset gaps, price mismatches, short history) are findings, not noise; list them.
 If a venue's data looks wrong (cross-venue mismatch, gaps), investigate and report. Summarize which factors matter using
 `factor_attribution` and `results`, and whether `viable` is true. If nothing is viable, say so plainly: that is a valid result.
 

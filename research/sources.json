@@ -13,7 +13,7 @@
     "What survives honest evaluation? LLM-driven trading strategy discovery (arXiv 2608.27734)",
     "The Alpha Illusion: Reported Alpha from LLM trading agents (alphaXiv 2605.16895)"
   ],
-  "venues": ["kucoin", "dydx", "hyperliquid", "deribit", "bitmex", "uniswap"],
+  "venues": ["kucoin", "dydx", "hyperliquid", "deribit", "bitfinex", "uniswap"],
   "assets": ["BTC", "ETH", "SOL"],
-  "intervals": ["1h", "4h", "1d"]
+  "intervals": ["1h", "4h", "6h", "1d"]
 }

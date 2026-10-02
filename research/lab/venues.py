@@ -18,7 +18,7 @@ import httpx
 from research.lab import cache
 
 Candle = Dict[str, float]
-INTERVAL_MS = {"1m": 60_000, "5m": 300_000, "15m": 900_000, "1h": 3_600_000, "4h": 14_400_000, "1d": 86_400_000}
+INTERVAL_MS = {"1m": 60_000, "5m": 300_000, "15m": 900_000, "1h": 3_600_000, "4h": 14_400_000, "6h": 21_600_000, "1d": 86_400_000}
 
 
 class VenueError(Exception):
@@ -37,11 +37,32 @@ def _dedupe_sorted(rows: List[Candle], start_ms: int, end_ms: int) -> List[Candl
     return [seen[k] for k in sorted(seen)]
 
 
+def aggregate_candles(rows: List[Candle], bar_ms: int) -> List[Candle]:
+    """Build `bar_ms` candles (aligned to UTC multiples of bar_ms) from finer ones. Incomplete buckets are dropped."""
+    if not rows:
+        return []
+    src = rows[1]["ts"] - rows[0]["ts"] if len(rows) > 1 else bar_ms
+    need = bar_ms // src
+    buckets: Dict[int, List[Candle]] = {}
+    for r in rows:
+        buckets.setdefault((r["ts"] // bar_ms) * bar_ms, []).append(r)
+    out = []
+    for ts in sorted(buckets):
+        b = buckets[ts]
+        if len(b) < need:
+            continue  # partial bucket (range edge or missing source bars): never emit a synthetic bar
+        out.append({"ts": ts, "open": b[0]["open"], "high": max(x["high"] for x in b), "low": min(x["low"] for x in b),
+                    "close": b[-1]["close"], "volume": sum(x["volume"] for x in b)})
+    return out
+
+
 class VenueAdapter(ABC):
     name = "base"
     kind = "spot"            # spot | perp | dex
     has_funding = False
     min_request_gap_s = 0.15
+    day_offset_ms = 0            # UTC offset of this venue's daily candle open (0 = 00:00 UTC)
+    max_history_candles = None   # hard cap on how far back the API serves (informational; reported in data quality)
     intervals: Dict[str, Any] = {}
     assets: Dict[str, str] = {}  # canonical asset -> venue symbol
 
@@ -80,10 +101,21 @@ class VenueAdapter(ABC):
         return self.assets[asset]
 
     # ── cached public API ───────────────────────────────────────────────────
+    def supports(self, interval: str) -> bool:
+        return interval in self.intervals or self._aggregable(interval)
+
+    def _aggregable(self, interval: str) -> bool:
+        return (interval in INTERVAL_MS and interval not in self.intervals and "1h" in self.intervals
+                and INTERVAL_MS[interval] % INTERVAL_MS["1h"] == 0 and interval != "1d")
+
     def candles(self, asset: str, interval: str, start_ms: int, end_ms: int, fresh: bool = False) -> List[Candle]:
-        """`fresh=True` skips the disk cache (live ticks); historical sweeps use the cache."""
-        if interval not in self.intervals:
+        """`fresh=True` skips the disk cache (live ticks). Intervals the venue lacks (4h, 6h) are aggregated from its 1h bars."""
+        if not self.supports(interval):
             raise NotSupported(f"{self.name} does not support interval {interval}")
+        if interval not in self.intervals:
+            bar = INTERVAL_MS[interval]
+            lo, hi = (start_ms // bar) * bar, (end_ms // bar) * bar
+            return aggregate_candles(self.candles(asset, "1h", lo, hi, fresh=fresh), bar)
         key = {"kind": "candles", "venue": self.name, "asset": asset, "interval": interval, "start": start_ms, "end": end_ms}
         hit = None if fresh else cache.get(key)
         if hit is not None:
@@ -194,6 +226,7 @@ class DYDX(VenueAdapter):
 # ── Hyperliquid ─────────────────────────────────────────────────────────────
 class Hyperliquid(VenueAdapter):
     name, kind, has_funding = "hyperliquid", "perp", True
+    max_history_candles = 5000   # the info API serves only the most recent ~5000 candles per interval
     intervals = {"1m": "1m", "5m": "5m", "15m": "15m", "1h": "1h", "4h": "4h", "1d": "1d"}
     assets = {a: a for a in ("BTC", "ETH", "SOL", "BNB", "XRP", "AVAX", "LINK", "DOGE", "ADA")}
     url = "https://api.hyperliquid.xyz/info"
@@ -228,6 +261,7 @@ class Hyperliquid(VenueAdapter):
 # ── Deribit ─────────────────────────────────────────────────────────────────
 class Deribit(VenueAdapter):
     name, kind, has_funding = "deribit", "perp", True
+    day_offset_ms = 8 * 3_600_000   # daily candles open at 08:00 UTC, not 00:00 (found by the pilot run)
     intervals = {"1m": "1", "5m": "5", "15m": "15", "1h": "60", "1d": "1D"}  # no native 4h resolution; not faked
     assets = {"BTC": "BTC-PERPETUAL", "ETH": "ETH-PERPETUAL"}
     base = "https://www.deribit.com/api/v2/public"
@@ -267,6 +301,20 @@ class BitMEX(VenueAdapter):
     assets = {"BTC": "XBTUSD", "ETH": "ETHUSD"}
     base = "https://www.bitmex.com/api/v1"
 
+    def __init__(self, *a, **kw):
+        super().__init__(*a, **kw)
+        self._state: Dict[str, str] = {}      # per-instance (a shared class dict leaked contract states between adapters)
+
+    def _check_active(self, symbol: str) -> None:
+        """BitMEX retires contracts (the pilot found XBTUSD/ETHUSD 'Settled' on 2026-09-16). Refuse them with a clear reason."""
+        if symbol not in self._state:
+            rows = self._request("GET", f"{self.base}/instrument", params={"symbol": symbol, "columns": "symbol,state,expiry"}) or []
+            self._state[symbol] = (rows[0].get("state") if rows else "Unknown") or "Unknown"
+            if rows and rows[0].get("expiry"):
+                self._state[symbol] += f" (expiry {rows[0]['expiry']})"
+        if not self._state[symbol].startswith(("Open", "Unknown")):
+            raise NotSupported(f"bitmex {symbol} is not an active contract: {self._state[symbol]}")
+
     @staticmethod
     def _iso(ms: int) -> str:
         return time.strftime("%Y-%m-%dT%H:%M:%S.000Z", time.gmtime(ms / 1000))
@@ -277,6 +325,7 @@ class BitMEX(VenueAdapter):
         return calendar.timegm(time.strptime(s[:19], "%Y-%m-%dT%H:%M:%S")) * 1000
 
     def _fetch_candles(self, symbol, interval, start_ms, end_ms):
+        self._check_active(symbol)
         out: List[Candle] = []
         cur = start_ms
         bar = INTERVAL_MS[interval]
@@ -288,7 +337,9 @@ class BitMEX(VenueAdapter):
                 if r.get("open") is None:
                     continue
                 # BitMEX stamps buckets at their CLOSE; shift to the bar open so all venues share one convention
-                out.append({"ts": self._parse_iso(r["timestamp"]) - bar, "open": float(r["open"]), "high": float(r["high"]), "low": float(r["low"]), "close": float(r["close"]), "volume": float(r.get("volume") or 0)})
+                o, h, l, c = (float(r[k]) for k in ("open", "high", "low", "close"))
+                # BitMEX opens each bucket at the previous close, so open can fall outside [low, high]; widen the range to include it
+                out.append({"ts": self._parse_iso(r["timestamp"]) - bar, "open": o, "high": max(h, o, c), "low": min(l, o, c), "close": c, "volume": float(r.get("volume") or 0)})
             nxt = self._parse_iso(rows[-1]["timestamp"]) + 1
             if nxt <= cur or len(rows) < 1000:
                 break
@@ -305,6 +356,31 @@ class BitMEX(VenueAdapter):
             out.extend({"ts": self._parse_iso(r["timestamp"]), "rate": float(r["fundingRate"])} for r in rows)  # per 8h
             nxt = self._parse_iso(rows[-1]["timestamp"]) + 1
             if nxt <= cur or len(rows) < 500:
+                break
+            cur = nxt
+        return out
+
+
+# ── Bitfinex spot (long public history; replaces BitMEX, whose perpetuals are retired) ──
+class Bitfinex(VenueAdapter):
+    name, kind = "bitfinex", "spot"
+    min_request_gap_s = 1.0
+    intervals = {"1m": "1m", "5m": "5m", "15m": "15m", "1h": "1h", "1d": "1D"}
+    assets = {"BTC": "tBTCUSD", "ETH": "tETHUSD", "SOL": "tSOLUSD", "XRP": "tXRPUSD", "ADA": "tADAUSD", "AVAX": "tAVAX:USD", "LINK": "tLINK:USD", "DOGE": "tDOGE:USD"}
+    base = "https://api-pub.bitfinex.com/v2"
+
+    def _fetch_candles(self, symbol, interval, start_ms, end_ms):
+        out: List[Candle] = []
+        cur = start_ms
+        while cur < end_ms:
+            rows = self._request("GET", f"{self.base}/candles/trade:{self.intervals[interval]}:{symbol}/hist",
+                                 params={"start": cur, "end": end_ms, "limit": 10000, "sort": 1}) or []
+            if not rows:
+                break
+            for t, o, c, h, l, v in rows:   # bitfinex column order: MTS, OPEN, CLOSE, HIGH, LOW, VOLUME
+                out.append({"ts": int(t), "open": float(o), "high": float(h), "low": float(l), "close": float(c), "volume": float(v)})
+            nxt = int(rows[-1][0]) + 1
+            if nxt <= cur or len(rows) < 10000:
                 break
             cur = nxt
         return out
@@ -359,7 +435,7 @@ class Uniswap(VenueAdapter):
         return out
 
 
-REGISTRY = {c.name: c for c in (KuCoin, DYDX, Hyperliquid, Deribit, BitMEX, Uniswap)}
+REGISTRY = {c.name: c for c in (KuCoin, DYDX, Hyperliquid, Deribit, Bitfinex, BitMEX, Uniswap)}
 
 
 def get_venue(name: str, **kw) -> VenueAdapter:

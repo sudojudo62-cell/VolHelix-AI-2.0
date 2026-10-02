@@ -108,8 +108,9 @@ def metrics_from_state(st: TrialState, interval: str) -> Dict[str, float]:
     from research.lab import metrics as M
     r = np.array(st.returns)
     bpy = 365.0 * 86_400_000 / INTERVAL_MS[interval]
+    # Sharpe over a handful of bars is noise (the pilot saw -8.8 on 3 bars), so it is reported only with >= 20 observations
     return {"return_pct": (st.equity / START_EQUITY - 1) * 100, "max_drawdown_pct": M.max_drawdown_pct(r), "bars": st.bars,
-            "turnover": st.turnover, "sharpe": M.sharpe(r, bpy) if len(r) > 2 else 0.0}
+            "turnover": st.turnover, "sharpe": (M.sharpe(r, bpy) if len(r) >= 20 else None)}
 
 
 def adapter_for(venue: str) -> VenueAdapter:

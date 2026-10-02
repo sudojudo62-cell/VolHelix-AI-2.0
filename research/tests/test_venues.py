@@ -4,7 +4,7 @@ import httpx
 import pytest
 
 from research.lab import cache
-from research.lab.venues import DYDX, REGISTRY, BitMEX, Deribit, Hyperliquid, KuCoin, NotSupported, Uniswap, VenueError
+from research.lab.venues import DYDX, REGISTRY, BitMEX, Bitfinex, Deribit, Hyperliquid, KuCoin, NotSupported, Uniswap, VenueError, aggregate_candles
 
 H = 3_600_000
 
@@ -91,18 +91,18 @@ def test_hyperliquid_candles_and_funding():
     assert a.funding("ETH", 0, 3 * H)[0]["rate"] == 0.00001
 
 
-def test_deribit_has_no_native_4h_and_parses_columns():
+def test_deribit_has_no_native_4h_but_aggregates_and_parses_columns():
     a = adapter(Deribit, lambda r: httpx.Response(200, json={"result": {"ticks": [H], "open": [1], "high": [2], "low": [0.5], "close": [1.5], "volume": [3]}}))
-    assert "4h" not in a.intervals
+    assert "4h" not in a.intervals and a.supports("4h")
     with pytest.raises(NotSupported):
-        a.candles("BTC", "4h", 0, H)
+        a.candles("BTC", "3m", 0, H)
     assert a.candles("BTC", "1h", 0, 2 * H)[0]["high"] == 2.0
 
 
 def test_bitmex_timestamps_are_shifted_to_bar_open():
     def handler(req):
         return httpx.Response(200, json=[{"timestamp": "1970-01-01T02:00:00.000Z", "open": 1, "high": 2, "low": 1, "close": 2, "volume": 5}])
-    out = adapter(BitMEX, handler).candles("BTC", "1h", 0, 4 * H)
+    out = adapter(BitMEX, handler_with_state(handler)).candles("BTC", "1h", 0, 4 * H)
     assert out[0]["ts"] == H  # bucket stamped at close 02:00 -> open 01:00
 
 
@@ -117,5 +117,52 @@ def test_uniswap_needs_key_and_inverts_asset_per_usd_quotes(monkeypatch):
 
 
 def test_registry_has_the_six_research_venues():
-    assert set(REGISTRY) == {"kucoin", "dydx", "hyperliquid", "deribit", "bitmex", "uniswap"}
+    assert set(REGISTRY) == {"kucoin", "dydx", "hyperliquid", "deribit", "bitfinex", "bitmex", "uniswap"}
     assert REGISTRY["uniswap"].kind == "dex" and REGISTRY["dydx"].has_funding and not REGISTRY["kucoin"].has_funding
+
+
+def handler_with_state(inner, state="Open"):
+    def h(req):
+        if req.url.path.endswith("/instrument"):
+            return httpx.Response(200, json=[{"symbol": req.url.params["symbol"], "state": state, "expiry": "2026-09-16T12:00:00.000Z"}])
+        return inner(req)
+    return h
+
+
+def test_bitmex_settled_contract_is_refused_with_a_clear_reason():
+    a = adapter(BitMEX, handler_with_state(lambda r: httpx.Response(200, json=[]), state="Settled"))
+    with pytest.raises(NotSupported, match="not an active contract.*Settled"):
+        a.candles("BTC", "1h", 0, 4 * H)
+
+
+def test_bitmex_open_outside_range_is_widened_to_valid_ohlc():
+    rows = [{"timestamp": "1970-01-01T02:00:00.000Z", "open": 10, "high": 9, "low": 8, "close": 9.5, "volume": 1}]  # open above high
+    out = adapter(BitMEX, handler_with_state(lambda r: httpx.Response(200, json=rows))).candles("BTC", "1h", 0, 4 * H)
+    assert out[0]["high"] == 10 and out[0]["low"] == 8
+
+
+def test_bitfinex_column_order_is_mts_open_close_high_low():
+    rows = [[H, 100, 105, 110, 95, 7]]
+    out = adapter(Bitfinex, lambda r: httpx.Response(200, json=rows)).candles("BTC", "1h", 0, 3 * H)
+    assert out[0] == {"ts": H, "open": 100.0, "high": 110.0, "low": 95.0, "close": 105.0, "volume": 7.0}
+
+
+def test_missing_native_intervals_are_aggregated_from_1h():
+    def handler(req):
+        rows = [{"t": i * H, "o": str(i + 1), "h": str(i + 2), "l": str(i), "c": str(i + 1.5), "v": "1"} for i in range(8)]
+        return httpx.Response(200, json=rows)
+    a = adapter(Deribit, lambda r: httpx.Response(200, json={"result": {"ticks": [i * H for i in range(8)], "open": [i + 1 for i in range(8)], "high": [i + 2 for i in range(8)],
+                                                                 "low": [i for i in range(8)], "close": [i + 1.5 for i in range(8)], "volume": [1] * 8}}))
+    assert a.supports("4h") and "4h" not in a.intervals
+    out = a.candles("BTC", "4h", 0, 8 * H)
+    assert [c["ts"] for c in out] == [0, 4 * H]
+    assert out[0]["open"] == 1 and out[0]["close"] == 4.5 and out[0]["high"] == 5 and out[0]["low"] == 0 and out[0]["volume"] == 4
+
+
+def test_aggregation_drops_incomplete_buckets():
+    rows = [{"ts": i * H, "open": 1, "high": 2, "low": 0.5, "close": 1, "volume": 1} for i in range(1, 7)]  # hours 1..6: bucket 0 partial, 4h bucket 1 partial
+    assert aggregate_candles(rows, 4 * H) == []
+
+
+def test_deribit_declares_its_8h_daily_offset_and_hyperliquid_its_history_cap():
+    assert Deribit.day_offset_ms == 8 * H and Hyperliquid.max_history_candles == 5000 and KuCoin.day_offset_ms == 0

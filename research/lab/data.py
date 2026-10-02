@@ -50,31 +50,47 @@ class MarketData:
                           self.low[:, idx], self.close[:, idx], self.volume[:, idx], f, self.quality)
 
 
-def validate_candles(rows: List[dict], interval: str) -> dict:
-    """Quality report for one asset's candles. `bad_ohlc` counts rows violating high >= max(o,c) / low <= min(o,c)."""
+def validate_candles(rows: List[dict], interval: str, start_ms: Optional[int] = None, end_ms: Optional[int] = None) -> dict:
+    """Quality report for one asset's candles. `bad_ohlc` counts rows violating high >= max(o,c) / low <= min(o,c).
+
+    With start_ms/end_ms the expected bar count covers the REQUESTED range, so a venue that stops early, starts late or caps
+    history shows up as missing data instead of looking complete (a gap-free but truncated series used to pass).
+    """
     bar = INTERVAL_MS[interval]
     if not rows:
         return {"n": 0, "expected": 0, "missing_pct": 100.0, "max_gap_bars": 0, "bad_ohlc": 0, "first_ts": None, "last_ts": None}
     ts = [r["ts"] for r in rows]
-    expected = (ts[-1] - ts[0]) // bar + 1
+    if start_ms is not None and end_ms is not None:
+        expected = max((end_ms - start_ms) // bar, 1)
+    else:
+        expected = (ts[-1] - ts[0]) // bar + 1
     gaps = [(b - a) // bar - 1 for a, b in zip(ts, ts[1:])]
     bad = sum(1 for r in rows if r["high"] < max(r["open"], r["close"]) * (1 - 1e-9) or r["low"] > min(r["open"], r["close"]) * (1 + 1e-9)
               or min(r["open"], r["high"], r["low"], r["close"]) <= 0)
-    return {"n": len(rows), "expected": int(expected), "missing_pct": round(100 * (1 - len(rows) / expected), 3),
-            "max_gap_bars": int(max(gaps) if gaps else 0), "bad_ohlc": bad, "first_ts": ts[0], "last_ts": ts[-1]}
+    out = {"n": len(rows), "expected": int(expected), "missing_pct": round(max(0.0, 100 * (1 - len(rows) / expected)), 3),
+           "max_gap_bars": int(max(gaps) if gaps else 0), "bad_ohlc": bad, "first_ts": ts[0], "last_ts": ts[-1]}
+    if start_ms is not None and end_ms is not None:
+        out["head_gap_bars"] = int(max(ts[0] - start_ms, 0) // bar)      # data missing before the first bar (history cap / late listing)
+        out["tail_gap_bars"] = int(max(end_ms - bar - ts[-1], 0) // bar)  # data missing at the end (venue stopped serving)
+    return out
 
 
 def build_market_data(venue: VenueAdapter, assets: Sequence[str], interval: str, start_ms: int, end_ms: int,
-                      with_funding: bool = False, max_missing_pct: float = 3.0, fresh: bool = False) -> MarketData:
+                      with_funding: bool = False, max_missing_pct: float = 3.0, fresh: bool = False,
+                      allow_head_gap_bars: int = 0) -> MarketData:
     """Fetch, validate and inner-join assets on timestamp. Raises DataQualityError rather than returning bad data."""
     per_asset, quality = {}, {}
     for a in assets:
         rows = venue.candles(a, interval, start_ms, end_ms, fresh=fresh) if fresh else venue.candles(a, interval, start_ms, end_ms)
-        q = validate_candles(rows, interval)
+        q = validate_candles(rows, interval, start_ms, end_ms)
         quality[a] = q
         if q["n"] == 0:
             raise DataQualityError(f"{venue.name}/{a}/{interval}: no candles returned")
-        if q["missing_pct"] > max_missing_pct or q["bad_ohlc"] > 0.01 * q["n"]:
+        missing = q["missing_pct"]
+        head = q.get("head_gap_bars", 0)
+        if 0 < head <= allow_head_gap_bars and q["expected"] > head:   # shortage confined to the warm-up zone is tolerated, but recorded
+            missing = max(0.0, 100 * (1 - q["n"] / (q["expected"] - head)))
+        if missing > max_missing_pct or q["bad_ohlc"] > 0.01 * q["n"]:
             raise DataQualityError(f"{venue.name}/{a}/{interval}: poor data {q}")
         per_asset[a] = {r["ts"]: r for r in rows if min(r["open"], r["high"], r["low"], r["close"]) > 0}
     common = sorted(set.intersection(*(set(d) for d in per_asset.values())))
@@ -90,7 +106,8 @@ def build_market_data(venue: VenueAdapter, assets: Sequence[str], interval: str,
         bar = INTERVAL_MS[interval]
         funding = np.zeros((len(ts), len(assets)))
         for j, a in enumerate(assets):
-            evs = venue.funding(a, int(ts[0]), int(ts[-1]) + bar, fresh=True) if fresh else venue.funding(a, int(ts[0]), int(ts[-1]) + bar)
+            # one fetch per asset for the whole requested window, so the cache is shared across intervals
+            evs = venue.funding(a, start_ms, end_ms, fresh=True) if fresh else venue.funding(a, start_ms, end_ms)
             for ev in evs:
                 i = np.searchsorted(ts, ev["ts"], side="right") - 1  # bar containing the event
                 if 0 <= i < len(ts) and ev["ts"] < ts[i] + bar:

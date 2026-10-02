@@ -18,6 +18,8 @@ class Strategy:
     requires_funding = False
     min_assets = 1
     max_assets = 1
+    warmup_days = 0          # history the signal needs before it is valid; cells with less warm-up data are skipped
+    internal_trials = 1      # extra configurations the strategy searches internally per run (counted in the Deflated Sharpe)
 
     def asset_sets(self, assets: Sequence[str]) -> List[List[str]]:
         """Which asset combinations to test. Default: each asset on its own."""

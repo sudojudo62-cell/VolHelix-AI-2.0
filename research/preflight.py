@@ -16,6 +16,7 @@ VENUE_PINGS = {
     "dydx": ("GET", "https://indexer.dydx.trade/v4/time", None),
     "hyperliquid": ("POST", "https://api.hyperliquid.xyz/info", {"type": "meta"}),
     "deribit": ("GET", "https://www.deribit.com/api/v2/public/get_time", None),
+    "bitfinex": ("GET", "https://api-pub.bitfinex.com/v2/platform/status", None),
     "bitmex": ("GET", "https://www.bitmex.com/api/v1/announcement", None),
     "uniswap(the graph)": ("GET", "https://gateway.thegraph.com/api/", None),
     "binance (control: VolHelix live feed)": ("GET", "https://api.binance.com/api/v3/ping", None),
@@ -37,9 +38,16 @@ def main() -> int:
     bad = 0
     for name, (m, u, b) in VENUE_PINGS.items():
         res = check(m, u, b)
-        ok = res.startswith("HTTP") and not res.startswith("HTTP 403") and not res.startswith("HTTP 407")
-        bad += 0 if ok or name.startswith("uniswap") else 1  # the Graph gateway answers 4xx without a key; reachability is what matters
-        print(f"{'OK ' if ok else 'BAD'} {name:40s} {res}")
+        code = int(res.split()[1]) if res.startswith("HTTP") else 0
+        if name.startswith("uniswap"):
+            ok = code in (200, 400, 401, 403, 404)          # the Graph gateway answers 4xx without a key: reachable is enough
+        else:
+            ok = 200 <= code < 300
+        control = name.startswith("binance")
+        # 451 = the host is geo-blocking this environment; fine for research venues' data, but it means the live VolHelix feed won't work here
+        label = "OK  " if ok else ("WARN" if control else "BAD ")
+        bad += 0 if ok or control else 1
+        print(f"{label} {name:40s} {res}")
     for u in a.sources:
         res = check("GET", u)
         print(f"{'OK ' if res.startswith('HTTP 2') else 'BAD'} source {u} {res}")

@@ -67,7 +67,7 @@ def main(argv=None) -> int:
 
 def _replay(slug: str, hours: float) -> None:
     """Replay the most recent `hours` of real candles for the summary's recommended config through the full trial path."""
-    from backend.governor.trial import adapter_for
+    from backend.governor.trial import adapter_for, find_strategy
     from research.lab.data import build_market_data
     from research.lab.venues import INTERVAL_MS
     summ = store.get_summary(slug)
@@ -76,11 +76,13 @@ def _replay(slug: str, hours: float) -> None:
     rec = summ["data"]["recommended_trial"]
     bar = INTERVAL_MS[rec["interval"]]
     end = (int(time.time() * 1000) // bar) * bar
-    md = build_market_data(adapter_for(rec["venue"]), rec["assets"], rec["interval"], end - 760 * bar, end,
-                           with_funding=False)
-    first = int(md.ts[-1]) - int(hours * 3_600_000) + bar - bar
+    adapter = adapter_for(rec["venue"])
+    strat = find_strategy(slug, rec["strategy_id"])
+    md = build_market_data(adapter, rec["assets"], rec["interval"], end - 760 * bar, end,
+                           with_funding=strat.requires_funding or adapter.has_funding)   # same funding handling as live ticks
+    first = int(md.ts[-1]) - int(hours * 3_600_000)
     tid = service.start_trial(slug, "replay", hours, now_ms=first + bar, first_bar_ts=first)
-    _print({"trial_id": tid, **service.run_replay(tid, md)})
+    _print({"trial_id": tid, **service.run_replay(tid, md, adapter)})
 
 
 if __name__ == "__main__":

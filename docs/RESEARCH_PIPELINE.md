@@ -13,7 +13,7 @@ research/summaries/<slug>.json  --(ingest)-->  dashboard governing agent (backen
 ## Pieces
 | Path | Role |
 |---|---|
-| `research/lab/venues.py` | Public-data adapters: KuCoin, dYdX v4, Hyperliquid, Deribit, BitMEX, Uniswap v3 (needs free `THEGRAPH_API_KEY`) |
+| `research/lab/venues.py` | Public-data adapters: KuCoin, dYdX v4, Hyperliquid, Deribit, Bitfinex, Uniswap v3 (needs free `THEGRAPH_API_KEY`); BitMEX kept but refuses retired contracts; 4h/6h aggregated from 1h |
 | `research/lab/engine.py` | Causal vectorized simulator (next-bar-open fills, fees, slippage, funding), lookahead detector |
 | `research/lab/sweep.py` | Factor sweep, 6-month walk-forward OOS, Deflated Sharpe over *all* trials, regimes, factor attribution |
 | `research/lab/summary.py` | Summary-file schema handed to the governor |
@@ -23,13 +23,14 @@ research/summaries/<slug>.json  --(ingest)-->  dashboard governing agent (backen
 
 ## Ranking rule
 Strategies are ranked by **walk-forward out-of-sample net return** (parameters chosen on 60-day train windows, scored on the next
-unseen 30 days, 4 folds in 6 months). Gates: OOS net return > 0, beats buy-and-hold on return or halves its drawdown, deflated
-Sharpe >= 0.5 (computed over every configuration tried in the sweep), max drawdown <= 35%. Last-30-day profit is shown, not ranked on.
+unseen 30 days, 6 folds = 6 months out-of-sample, after 90 days of indicator warm-up). Gates: OOS net return > 0, beats buy-and-hold on return or halves its drawdown, deflated
+Sharpe >= 0.5 (computed over every configuration tried in the sweep, with the trial-variance taken per bar interval), max drawdown <= 35%. Last-30-day profit is shown, not ranked on.
 
 ## Governor decision (after 72h of live paper trading)
 INTEGRATE only if all hold: backtest viable; trial integrity (>= 90% of bars, no data gaps/errors); drawdown within
 max(8%, 1.5x the backtest's OOS drawdown); trial return not below the backtest's 72h 10th percentile; current market regime is one
-the backtest found favorable. Otherwise SHELVE and add to the watchlist, which re-checks the live regime and flags
+the backtest found favorable (regimes are daily-based, need >= 20 days and >= 10% of the sample to count, and are reported as
+"not gated" when the backtest could not name one). Otherwise SHELVE and add to the watchlist, which re-checks the live regime and flags
 `READY_FOR_RETRIAL` after two consecutive favorable readings. **Nothing is integrated without human approval** (`approve`), and
 approval only creates a paper sleeve record: it never touches the live exchange adapter.
 
@@ -50,3 +51,11 @@ The loop ticks every running trial (a 1h-interval trial books a result each clos
 - Order-flow strategies need historical L2/trade data that candle APIs do not provide; they can only be paper-traded live.
 - Venue adapters were written from public API docs and mock-tested; the first real run is also their integration test.
 - Fees/slippage are assumptions (`research/lab/engine.py::VENUE_COSTS`).
+
+## Lessons from the pilot run (fixed)
+The first research agent (trend-following) ran the whole workflow against real venues and found: a Deflated-Sharpe scaling bug that
+made one cell look viable (pooled trial variance across intervals), funding ignored for ordinary strategies on perps, a retired
+BitMEX contract set, silent history truncation and warm-up shortfalls, a Deribit daily-candle boundary mismatch, per-interval
+regime labels that disagreed, and a replay that dropped funding. All are fixed and have regression tests. Its own conclusion
+(the paper's headline Sharpe is not reproduced; only long-only SOL trend filters earned in one strong uptrend) is in
+`research/reports/trend_following.md`; its numbers predate the fixes and are being re-run.

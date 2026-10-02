@@ -14,7 +14,7 @@ from research.lab.summary import Source
 from research.lab.sweep import SweepConfig, run_sweep
 from research.tests.synth import EmaTrend, FakeVenue, H, walk
 
-N = 7200
+N = 7920
 SLUG = "test"
 client = TestClient(fastapi_app)
 

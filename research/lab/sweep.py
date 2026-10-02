@@ -33,8 +33,8 @@ class SweepConfig:
     assets: Sequence[str]
     intervals: Sequence[str]
     end_ms: int
-    months: int = 6
-    warmup_days: int = 120          # extra history before the analysis window so slow indicators are warm
+    months: int = 6                 # months of OUT-OF-SAMPLE evaluation (the window also needs `train_days` of data before it)
+    warmup_days: int = 90           # extra history before the analysis window so slow indicators are warm
     train_days: int = 60
     test_days: int = 30
     max_combos: int = 400
@@ -43,7 +43,8 @@ class SweepConfig:
 
     @property
     def start_ms(self) -> int:
-        return self.end_ms - self.months * 30 * DAY
+        """Start of the analysis window = first training bar; 6 test folds of 30d follow `train_days` later."""
+        return self.end_ms - (self.train_days + self.months * 30) * DAY
 
 
 def expand_grid(grid: Dict[str, Sequence], limit: int) -> List[dict]:
@@ -61,7 +62,7 @@ def _git_commit() -> str:
         return "unknown"
 
 
-def evaluate_cell(strategy: Strategy, md: MarketData, a0: int, combos: List[dict], cfg: SweepConfig, trial_sr: List[float]) -> Optional[dict]:
+def evaluate_cell(strategy: Strategy, md: MarketData, a0: int, combos: List[dict], cfg: SweepConfig, trial_sr: Dict[str, List[float]]) -> Optional[dict]:
     """Walk-forward one (venue, assets, interval) cell. `a0` = first analysis bar (earlier bars only warm indicators)."""
     costs = cfg.costs.get(md.venue) or Costs.for_venue(md.venue)
     bpy = md.bars_per_year
@@ -77,7 +78,7 @@ def evaluate_cell(strategy: Strategy, md: MarketData, a0: int, combos: List[dict
     for p, s in zip(combos, sims):
         r = s.returns[a0:]
         full.append({"params": p, "sharpe": M.sharpe(r, bpy), "return_pct": M.total_return_pct(r)})
-        trial_sr.append(M.sharpe(r, bpy) / np.sqrt(bpy))
+        trial_sr.setdefault(md.interval, []).append(M.sharpe(r, bpy) / np.sqrt(bpy))  # per-period SR, pooled ONLY within an interval
     folds, oos_r, oos_turn, picks = [], [], [], []
     start = a0
     while start + train + test <= n:
@@ -103,12 +104,12 @@ def evaluate_cell(strategy: Strategy, md: MarketData, a0: int, combos: List[dict
     bench = M.total_return_pct(r_b) - 100 * costs.per_unit
     bench_dd = M.max_drawdown_pct(r_b)
     best_full = max(full, key=lambda d: d["sharpe"])
-    labels = regime_labels(md.close[:, 0], md.interval)[first_oos:first_oos + len(r_oos)]
+    labels = regime_labels(md.ts, md.close[:, 0])[first_oos:first_oos + len(r_oos)]
     modal = json.loads(Counter(picks).most_common(1)[0][0])
     sk, ku = M.moments(r_oos)
     return {
         "stats": stats, "folds": folds, "bench": bench, "bench_dd": bench_dd, "full": full, "best_full": best_full, "modal": modal,
-        "regimes": regime_performance(r_oos, labels, bpy), "window72": M.window_stats(r_oos, md.interval, 72.0),
+        "regimes": regime_performance(r_oos, labels, bpy, md.interval), "window72": M.window_stats(r_oos, md.interval, 72.0),
         "oos_sr_per_period": M.sharpe(r_oos, bpy) / np.sqrt(bpy), "n_obs": len(r_oos), "skew": sk, "kurt": ku,
     }
 
@@ -119,10 +120,11 @@ def run_sweep(strategies: Sequence[Strategy], source: Source, cfg: SweepConfig, 
     skipped: List[Dict[str, str]] = []
     quality: List[dict] = []
     cells: List[dict] = []
-    trial_sr: List[float] = []
+    trial_sr: Dict[str, List[float]] = {}
     n_trials = 0
     ref_md: Dict[tuple, MarketData] = {}
     warm_start = cfg.start_ms - cfg.warmup_days * DAY
+    warm_bars_for = lambda interval: int(cfg.warmup_days * DAY / INTERVAL_MS[interval])
 
     for strat in strategies:
         combos = expand_grid(strat.param_grid, cfg.max_combos)
@@ -139,22 +141,33 @@ def run_sweep(strategies: Sequence[Strategy], source: Source, cfg: SweepConfig, 
                 skipped.append({"strategy": strat.id, "venue": vname, "reason": "needs funding rates"})
                 continue
             for interval in cfg.intervals:
-                if interval not in ad.intervals:
+                if not ad.supports(interval):
                     skipped.append({"strategy": strat.id, "venue": vname, "interval": interval, "reason": "interval not supported"})
+                    continue
+                if interval == "1d" and ad.day_offset_ms:
+                    skipped.append({"strategy": strat.id, "venue": vname, "interval": interval,
+                                    "reason": f"daily candles open at +{ad.day_offset_ms // 3_600_000}h UTC (different day boundary than other venues); test 1h/4h instead"})
                     continue
                 for aset in strat.asset_sets(cfg.assets):
                     tag = f"{strat.id}/{vname}/{'+'.join(aset)}/{interval}"
                     try:
-                        md = build_market_data(ad, aset, interval, warm_start, cfg.end_ms, with_funding=strat.requires_funding)
+                        md = build_market_data(ad, aset, interval, warm_start, cfg.end_ms, with_funding=ad.has_funding,
+                                               allow_head_gap_bars=warm_bars_for(interval))
                     except (NotSupported, DataQualityError, VenueError) as exc:
                         skipped.append({"strategy": strat.id, "venue": vname, "assets": "+".join(aset), "interval": interval, "reason": str(exc)[:300]})
                         continue
                     window = cfg.end_ms - cfg.start_ms
                     if int(md.ts[-1]) - max(int(md.ts[0]), cfg.start_ms) < 0.97 * window:
                         skipped.append({"strategy": strat.id, "venue": vname, "assets": "+".join(aset), "interval": interval,
-                                        "reason": f"history shorter than the requested {cfg.months} months; refusing to report a shorter window as 6-month"})
+                                        "reason": f"history shorter than the required {cfg.train_days}d train + {cfg.months}mo out-of-sample; refusing to report a shorter window"})
                         continue
-                    quality.append({"cell": tag, **{a: q for a, q in md.quality.items()}})
+                    warm_avail = max(0.0, (cfg.start_ms - int(md.ts[0])) / DAY)
+                    if warm_avail < strat.warmup_days:
+                        skipped.append({"strategy": strat.id, "venue": vname, "assets": "+".join(aset), "interval": interval,
+                                        "reason": f"only {warm_avail:.0f}d of warm-up history available, strategy needs {strat.warmup_days}d"})
+                        continue
+                    quality.append({"cell": tag, "warmup_days_available": round(warm_avail, 1), "warmup_days_requested": cfg.warmup_days,
+                                    **{a: q for a, q in md.quality.items()}})
                     a0 = int(np.searchsorted(md.ts, cfg.start_ms))
                     if vname == cfg.reference_venue:
                         ref_md[(interval, tuple(aset))] = md
@@ -165,24 +178,29 @@ def run_sweep(strategies: Sequence[Strategy], source: Source, cfg: SweepConfig, 
                     if res is None:
                         skipped.append({"strategy": strat.id, "venue": vname, "assets": "+".join(aset), "interval": interval, "reason": "not enough history for one train+test fold"})
                         continue
-                    n_trials += len(combos)
+                    n_trials += len(combos) * max(strat.internal_trials, 1)
                     xc = None
                     if (interval, tuple(aset)) in ref_md and vname != cfg.reference_venue:
                         xc = cross_check(md, ref_md[(interval, tuple(aset))], aset[0])
                         if xc["ok"] is False:
                             skipped.append({"strategy": strat.id, "venue": vname, "assets": "+".join(aset), "interval": interval, "reason": f"price mismatch vs {cfg.reference_venue} (ratio {xc['median_ratio']:.3f}); discarded"})
                             continue
+                    quality[-1]["price_check"] = ("verified vs " + cfg.reference_venue) if (xc and xc["ok"]) else \
+                        ("reference venue" if vname == cfg.reference_venue else "NOT VERIFIED (" + (xc["reason"] if xc else "no reference data") + ")")
                     cells.append({"strat": strat, "md": md, "aset": aset, "interval": interval, "res": res, "xc": xc, "combos": combos})
 
-    sr_var = float(np.var(trial_sr, ddof=1)) if len(trial_sr) > 1 else 0.0
+    # Per-period Sharpe scales with sqrt(bars), so the trial-variance used to set the deflation threshold MUST come from the
+    # same interval as the cell being scored (pooling 1h and 1d variances made 1h unpassable and 1d too lenient).
+    sr_var_by_interval = {i: (float(np.var(v, ddof=1)) if len(v) > 1 else 0.0) for i, v in trial_sr.items()}
     results: List[CellResult] = []
     for c in cells:
         r, st = c["res"], c["res"]["stats"]
-        dsr = deflated_sharpe(r["oos_sr_per_period"], r["n_obs"], max(n_trials, 1), sr_var, r["skew"], r["kurt"])
+        dsr = deflated_sharpe(r["oos_sr_per_period"], r["n_obs"], max(n_trials, 1), sr_var_by_interval.get(c["interval"], 0.0), r["skew"], r["kurt"])
         results.append(CellResult(
             strategy_id=c["strat"].id, venue=c["md"].venue, assets=c["aset"], interval=c["interval"],
             oos_return_pct=st["return_pct"], oos_sharpe=st["sharpe"], oos_max_drawdown_pct=st["max_drawdown_pct"], oos_bars=st["bars"],
-            oos_last_30d_return_pct=st["last_30d_return_pct"], benchmark_oos_return_pct=r["bench"], benchmark_oos_max_drawdown_pct=r["bench_dd"], turnover_per_day=st["turnover_per_day"],
+            oos_last_30d_return_pct=st["last_30d_return_pct"], benchmark_oos_return_pct=r["bench"], benchmark_oos_max_drawdown_pct=r["bench_dd"],
+            turnover_per_day=st["turnover_per_day"],
             deflated_sharpe_prob=float(dsr), folds=r["folds"], best_full_sample={**r["best_full"], "note": "in-sample; do not trade on this"},
             regime_performance=r["regimes"], modal_params=r["modal"], window_72h_pct=r["window72"],
         ))
@@ -202,7 +220,7 @@ def run_sweep(strategies: Sequence[Strategy], source: Source, cfg: SweepConfig, 
 
     viable = [x for x in results if not passes(x)]
     best = viable[0] if viable else (results[0] if results else None)
-    reasons = [] if viable else (passes(best) if best else ["no cell produced results (see skipped)"])
+    reasons = ["passed all out-of-sample gates"] if viable else (passes(best) if best else ["no cell produced results (see skipped)"])
     rec = None
     if best:
         fav = [d["regime"] for d in best.regime_performance if d["sufficient"] and d["ann_return_pct"] > 0]
@@ -217,7 +235,7 @@ def run_sweep(strategies: Sequence[Strategy], source: Source, cfg: SweepConfig, 
         source=source, strategy_ids=[s.id for s in strategies],
         run={"months": cfg.months, "start_ms": cfg.start_ms, "end_ms": cfg.end_ms, "venues": list(cfg.venues), "assets": list(cfg.assets),
              "intervals": list(cfg.intervals), "train_days": cfg.train_days, "test_days": cfg.test_days, "n_trials": n_trials,
-             "trial_sharpe_variance": sr_var, "gates": GATES, "commit": _git_commit(), "seconds": round(time.time() - t0, 1),
+             "trial_sharpe_variance_by_interval": sr_var_by_interval, "gates": GATES, "commit": _git_commit(), "seconds": round(time.time() - t0, 1),
              "finished_at": int(time.time() * 1000)},
         results=results, factor_attribution=_attribution(cells, results), data_quality=quality, skipped=skipped,
         viable=bool(viable), viability_reasons=reasons, recommended_trial=rec,
