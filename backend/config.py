@@ -72,6 +72,19 @@ class Settings(BaseSettings):
     FLOW_TAPE_BROADCAST_HZ: float = 10.0
     FLOW_MAX_RECONNECT_BACKOFF_SEC: int = 60
     FLOW_CONFLUENCE_ENABLED: bool = True
+
+    # Quant overlays (research-driven; see docs/STRATEGY_RESEARCH.md). All OFF by default: validate with
+    # scripts/backtest_strategies.py before enabling. They can only veto trades or reduce size.
+    TREND_FILTER_ENABLED: bool = False
+    VOL_TARGET_ENABLED: bool = False
+    ATR_LEVELS_ENABLED: bool = False
+    QUANT_INTERVAL: str = "4h"
+    QUANT_BARS_PER_YEAR: float = 2190.0  # 4h bars
+    TREND_FAST: int = 20
+    TREND_SLOW: int = 100
+    VOL_TARGET_ANNUAL: float = 0.40
+    ATR_SL_MULT: float = 2.0
+    ATR_TP_MULT: float = 4.0
     FLOW_CONFLUENCE_WEIGHT: float = 0.25
     FLOW_PERSIST_BARS: bool = False
 

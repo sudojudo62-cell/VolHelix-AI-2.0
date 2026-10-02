@@ -263,3 +263,10 @@ with live status, latency and an embedded preview. Currently registered: **Infin
 ([repo](https://github.com/sudojudo62-cell/INFINITY-SWARM-DESK)) — serve it with
 `python3 -m http.server 8080` inside `chatgpt_bot_2_0/`. Add more projects by appending to `hub.json`
 (`id`, `name`, `kind`, `description`, `repo`, `dashboard_url`, `health_url`); override the file path with `HUB_REGISTRY`.
+
+### Quant overlays & backtesting
+
+Research-driven overlays (trend filter, volatility-targeted sizing, ATR exits) live in `backend/quant/` and are **off by
+default**. Validate them on real history with `python scripts/backtest_strategies.py --fetch BTCUSDT --interval 4h` (fees,
+slippage, walk-forward, Deflated Sharpe) before enabling the `TREND_FILTER_ENABLED` / `VOL_TARGET_ENABLED` /
+`ATR_LEVELS_ENABLED` flags. See `docs/STRATEGY_RESEARCH.md`.

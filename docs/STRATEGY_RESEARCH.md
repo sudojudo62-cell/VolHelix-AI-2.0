@@ -79,6 +79,22 @@ blogs rather than peer-reviewed work; they are marked._
   veto/explanation layer. Measure its marginal value: log signals with and without the debate and compare net
   outcomes before trusting it to add return.
 
+## Implementation status
+
+Roadmap steps 1, 3, 4 are implemented as **flag-gated, default-OFF** code (they only veto or reduce size):
+
+- `backend/quant/backtest.py`: cost-aware long/flat backtester (next-bar-open fills, fees, slippage, ATR stops that
+  fail closed), `walk_forward`, and `deflated_sharpe`.
+- `backend/quant/signals.py`: EMA trend filter, volatility-target multiplier (capped at 1.0), ATR and ATR levels.
+- `backend/quant/overlay.py`: hooks used by `auto_trader` behind `TREND_FILTER_ENABLED`, `VOL_TARGET_ENABLED`,
+  `ATR_LEVELS_ENABLED`.
+- `scripts/backtest_strategies.py`: compares buy-and-hold vs. the overlays net of fees, with walk-forward + DSR.
+
+**Not yet validated on real data.** The development sandbox could not reach any market-data host, so the harness
+was only exercised on a synthetic random walk, where it correctly found no significant edge (deflated Sharpe 0.2) and
+showed ATR stops churning. Run the script on real history before enabling any flag. Signal logging (step 2) and
+order-flow threshold calibration (step 5) are not done.
+
 ## Suggested roadmap (smallest steps first)
 
 1. Backtester with fees/slippage + walk-forward + deflated Sharpe (gates everything else).
