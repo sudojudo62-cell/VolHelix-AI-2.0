@@ -3,7 +3,7 @@
 import Link from "next/link";
 import Image from "next/image";
 import { usePathname } from "next/navigation";
-import { BarChart3, FileText, Shield, LayoutDashboard, ChevronLeft, ChevronRight, Activity, Cpu, Boxes } from "lucide-react";
+import { BarChart3, FileText, Shield, LayoutDashboard, ChevronLeft, ChevronRight, Activity, Cpu, Boxes, Radio } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import { useState, useEffect } from "react";
 import { getExchangeAccount } from "../lib/api";
@@ -14,6 +14,7 @@ const navItems = [
   { href: "/volatility", label: "Derivatives / Vol Lab", icon: BarChart3, key: "volatility" },
   { href: "/history", label: "Order History", icon: FileText, key: "history" },
   { href: "/audit", label: "Risk & Margin Audit", icon: Shield, key: "audit" },
+  { href: "/live", label: "Live Desk", icon: Radio, key: "live" },
   { href: "/hub", label: "Unified Hub", icon: Boxes, key: "hub" },
 ];
 
@@ -154,7 +155,8 @@ export function Sidebar({ collapsed = false, onToggle }: SidebarProps) {
         })}
       </nav>
 
-      {/* Bottom Unified Trading Account Health */}
+      {/* Bottom Unified Trading Account Health (paper/testnet figures: hidden on the Live Desk) */}
+      {!pathname?.startsWith("/live") && (
       <div className="p-2 border-t border-[#26282f]">
         {!isCollapsed ? (
           <div className="p-2.5 rounded-lg bg-[#18191f] border border-[#26282f] space-y-2 text-[11px] font-mono">
@@ -200,6 +202,7 @@ export function Sidebar({ collapsed = false, onToggle }: SidebarProps) {
           </Link>
         )}
       </div>
+      )}
     </motion.aside>
   );
 }

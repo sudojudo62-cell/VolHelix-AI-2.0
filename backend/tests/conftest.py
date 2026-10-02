@@ -1,4 +1,11 @@
 import os
+import tempfile
+
+# Keep test runs away from the developer's real signal / live-order databases.
+_tmp = tempfile.mkdtemp(prefix="volhelix-tests-")
+os.environ.setdefault("SIGNAL_DB_PATH", os.path.join(_tmp, "signals.db"))
+os.environ.setdefault("LIVE_DB_PATH", os.path.join(_tmp, "live.db"))
+import os
 import sys
 import pytest
 from datetime import datetime

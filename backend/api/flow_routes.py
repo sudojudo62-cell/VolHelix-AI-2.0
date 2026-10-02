@@ -124,7 +124,9 @@ def get_cvd(symbol: str, interval: str = "1m", limit: int = 240):
 @router.get("/api/flow/metrics")
 def get_metrics(symbol: str):
     check_flow_enabled()
-    return {"success": False, "error": "Not implemented completely yet"}
+    from backend.signals.live_feed import compute_live_snapshot
+    sym = _normalize_symbol(symbol)
+    return compute_live_snapshot(hub.get_state(sym), sym)
 
 @router.post("/api/flow/subscribe")
 def subscribe_symbol(req: SubscribeRequest):

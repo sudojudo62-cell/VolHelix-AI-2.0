@@ -92,8 +92,8 @@ Roadmap steps 1, 3, 4 are implemented as **flag-gated, default-OFF** code (they 
 
 **Not yet validated on real data.** The development sandbox could not reach any market-data host, so the harness
 was only exercised on a synthetic random walk, where it correctly found no significant edge (deflated Sharpe 0.2) and
-showed ATR stops churning. Run the script on real history before enabling any flag. Signal logging (step 2) and
-order-flow threshold calibration (step 5) are not done.
+showed ATR stops churning. Run the script on real history before enabling any flag. Signal logging (step 2) is now implemented (`backend/signals/`, see `LIVE_DESK.md`); order-flow threshold
+calibration (step 5) can use that log once it has accumulated labeled signals.
 
 ## Suggested roadmap (smallest steps first)
 

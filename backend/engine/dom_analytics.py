@@ -157,3 +157,6 @@ class DomEngine:
             walls=active_walls,
             levels=ladder
         )
+
+# Name used by api/flow_routes.py and api/websocket.py
+DomAnalyticsEngine = DomEngine

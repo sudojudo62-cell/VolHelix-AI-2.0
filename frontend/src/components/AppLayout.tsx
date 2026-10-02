@@ -9,6 +9,8 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
   const [collapsed, setCollapsed] = useState(false);
   const pathname = usePathname();
   const isFullBleed = pathname?.startsWith("/terminal");
+  // The Live Desk shows production feeds only; the shared header carries paper/simulated fallbacks, so hide it there.
+  const isLive = pathname?.startsWith("/live");
 
   useEffect(() => {
     const handleSidebarToggle = (e: Event) => {
@@ -27,7 +29,7 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
           collapsed ? "pl-[68px]" : "pl-[240px]"
         }`}
       >
-        <Header />
+        {!isLive && <Header />}
         <main
           className={`flex-1 w-full mx-auto ${
             isFullBleed

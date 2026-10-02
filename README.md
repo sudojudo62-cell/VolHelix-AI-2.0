@@ -270,3 +270,9 @@ Research-driven overlays (trend filter, volatility-targeted sizing, ATR exits) l
 default**. Validate them on real history with `python scripts/backtest_strategies.py --fetch BTCUSDT --interval 4h` (fees,
 slippage, walk-forward, Deflated Sharpe) before enabling the `TREND_FILTER_ENABLED` / `VOL_TARGET_ENABLED` /
 `ATR_LEVELS_ENABLED` flags. See `docs/STRATEGY_RESEARCH.md`.
+
+### Live Desk
+
+`/live` shows production-only streams, logged live signals with forward-return calibration, and a guarded live exchange adapter
+(read-only by default; test-order mode before real orders; token, caps, kill switch, risk gate, audit trail). See
+`docs/LIVE_DESK.md`.
