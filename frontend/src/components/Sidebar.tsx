@@ -3,7 +3,7 @@
 import Link from "next/link";
 import Image from "next/image";
 import { usePathname } from "next/navigation";
-import { BarChart3, FileText, Shield, LayoutDashboard, ChevronLeft, ChevronRight, Activity, Cpu, Boxes, Radio } from "lucide-react";
+import { BarChart3, FileText, Shield, LayoutDashboard, ChevronLeft, ChevronRight, Activity, Cpu, Boxes, Radio, ScanSearch } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import { useState, useEffect } from "react";
 import { getExchangeAccount } from "../lib/api";
@@ -15,6 +15,7 @@ const navItems = [
   { href: "/history", label: "Order History", icon: FileText, key: "history" },
   { href: "/audit", label: "Risk & Margin Audit", icon: Shield, key: "audit" },
   { href: "/live", label: "Live Desk", icon: Radio, key: "live" },
+  { href: "/scanner", label: "Pair Scanner", icon: ScanSearch, key: "scanner" },
   { href: "/hub", label: "Unified Hub", icon: Boxes, key: "hub" },
 ];
 
